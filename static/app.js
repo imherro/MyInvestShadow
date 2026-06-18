@@ -1,0 +1,192 @@
+const state = {
+  latest: null,
+};
+
+const fmtPct = (value, digits = 1) => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+  return `${Number(value).toFixed(digits)}%`;
+};
+
+const fmtNav = (value) => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+  return Number(value).toFixed(4);
+};
+
+const byId = (id) => document.getElementById(id);
+
+function showToast(message) {
+  const el = byId("toast");
+  el.textContent = message;
+  el.hidden = false;
+  window.clearTimeout(showToast.timer);
+  showToast.timer = window.setTimeout(() => {
+    el.hidden = true;
+  }, 3200);
+}
+
+function setButtonLoading(button, loading) {
+  button.disabled = loading;
+  button.dataset.label ||= button.textContent;
+  button.textContent = loading ? "处理中" : button.dataset.label;
+}
+
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `${response.status} ${response.statusText}`);
+  }
+  return response.json();
+}
+
+function renderMetrics(data) {
+  const run = data.run || {};
+  byId("navValue").textContent = fmtNav(run.nav);
+  byId("riskBudget").textContent = fmtPct(run.risk_budget_ratio);
+  byId("cashRatio").textContent = fmtPct(run.cash_ratio);
+  byId("basisDate").textContent = run.basis_date || "--";
+  byId("marketRegime").textContent = run.market_regime || "暂无市场状态";
+}
+
+function renderNavChart(points) {
+  const el = byId("navChart");
+  if (!points || points.length === 0) {
+    el.innerHTML = `<div class="empty-chart">暂无净值点</div>`;
+    return;
+  }
+  const width = 900;
+  const height = 260;
+  const pad = 34;
+  const navs = points.map((p) => Number(p.nav));
+  const min = Math.min(...navs);
+  const max = Math.max(...navs);
+  const span = Math.max(max - min, 0.01);
+  const coords = points.map((p, index) => {
+    const x = points.length === 1 ? width / 2 : pad + (index * (width - pad * 2)) / (points.length - 1);
+    const y = height - pad - ((Number(p.nav) - min) * (height - pad * 2)) / span;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const last = points[points.length - 1];
+  el.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+      <line x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}" stroke="#d9dee7" />
+      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" stroke="#d9dee7" />
+      <polyline points="${coords.join(" ")}" fill="none" stroke="#0f766e" stroke-width="3" vector-effect="non-scaling-stroke" />
+      <circle cx="${coords[coords.length - 1].split(",")[0]}" cy="${coords[coords.length - 1].split(",")[1]}" r="4" fill="#0f766e" />
+      <text x="${pad}" y="22" fill="#667085">最高 ${fmtNav(max)} / 最低 ${fmtNav(min)}</text>
+      <text x="${width - pad - 160}" y="22" fill="#17202a">${last.basis_date}  ${fmtNav(last.nav)}</text>
+    </svg>
+  `;
+}
+
+function renderAllocations(rows) {
+  byId("allocationCount").textContent = `${rows.length} 个目标`;
+  const tbody = byId("allocationRows");
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="6">暂无目标仓位</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map((row) => {
+    const drift = Number(row.drift_ratio || 0);
+    const pct = Number(row.pct_chg || 0);
+    const driftClass = drift >= 0 ? "positive" : "negative";
+    const pctClass = pct >= 0 ? "positive" : "negative";
+    return `
+      <tr>
+        <td>${row.code}</td>
+        <td>${row.name || row.code}</td>
+        <td class="theme-cell">${row.theme || ""}<br><span>${row.stage || ""}</span></td>
+        <td>${fmtPct(row.target_weight_ratio, 2)}</td>
+        <td class="${driftClass}">${fmtPct(drift, 2)}</td>
+        <td class="${pctClass}">${row.pct_chg === null ? "--" : fmtPct(pct, 2)}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
+function renderComparison(rows) {
+  const tbody = byId("compareRows");
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="6">提交真实持仓后显示对照</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map((row) => {
+    const diff = Number(row.difference_ratio || 0);
+    const diffClass = Math.abs(diff) <= 0.5 ? "" : diff > 0 ? "negative" : "positive";
+    return `
+      <tr>
+        <td>${row.code}</td>
+        <td>${row.name || row.code}</td>
+        <td>${fmtPct(row.actual_weight_ratio, 2)}</td>
+        <td>${fmtPct(row.target_weight_ratio, 2)}</td>
+        <td class="${diffClass}">${fmtPct(diff, 2)}</td>
+        <td>${row.status}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
+function renderSources(rows) {
+  byId("statusText").textContent = rows.length ? "已连接上游" : "暂无快照";
+  byId("sourceStatus").innerHTML = rows.map((row) => `
+    <div class="status-item">
+      <strong>${row.source} ${row.ok ? "正常" : "异常"}</strong>
+      <p>基准日：${row.basis_date || "--"}<br>获取时间：${row.fetched_at || "--"}<br>${row.error || row.content_hash || ""}</p>
+    </div>
+  `).join("");
+}
+
+function render(data) {
+  state.latest = data;
+  renderMetrics(data);
+  renderNavChart(data.nav_curve || []);
+  renderAllocations(data.allocations || []);
+  renderComparison(data.comparison || []);
+  renderSources(data.source_status || []);
+}
+
+async function loadState() {
+  const data = await fetchJson("/api/state");
+  render(data);
+}
+
+async function runRefresh() {
+  const button = byId("refreshBtn");
+  setButtonLoading(button, true);
+  try {
+    const data = await fetchJson("/api/run/daily", { method: "POST" });
+    render({ ...state.latest, ...data });
+    await loadState();
+    showToast("影子仓位已更新");
+  } catch (error) {
+    showToast(`刷新失败：${error.message}`);
+  } finally {
+    setButtonLoading(button, false);
+  }
+}
+
+async function submitHoldings() {
+  const button = byId("submitHoldingsBtn");
+  setButtonLoading(button, true);
+  try {
+    const payload = JSON.parse(byId("holdingsInput").value);
+    const data = await fetchJson("/api/actual-holdings", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    renderComparison(data.comparison || []);
+    showToast("真实持仓对照已更新");
+  } catch (error) {
+    showToast(`提交失败：${error.message}`);
+  } finally {
+    setButtonLoading(button, false);
+  }
+}
+
+byId("refreshBtn").addEventListener("click", runRefresh);
+byId("submitHoldingsBtn").addEventListener("click", submitHoldings);
+
+loadState().catch((error) => showToast(`加载失败：${error.message}`));
