@@ -27,6 +27,12 @@ const sleeveLabels = {
   thematic: "主题仓位",
   defensive: "防御仓位",
 };
+const sleeveShortLabels = {
+  core: "核心",
+  mainline: "主线",
+  thematic: "主题",
+  defensive: "防御",
+};
 
 function showToast(message) {
   const el = byId("toast");
@@ -128,9 +134,16 @@ function renderAllocations(rows) {
 
 function renderSleeveSummary(summary) {
   const entries = ["core", "mainline", "thematic", "defensive"];
-  byId("sleeveSummary").innerHTML = entries.map((key) => `
-    <div class="sleeve-item sleeve-${key}">
-      <span>${sleeveLabels[key]}</span>
+  const compact = window.innerWidth <= 560;
+  const minColumn = compact ? 52 : 78;
+  const columns = entries
+    .map((key) => `minmax(${minColumn}px, ${Math.max(Number(summary?.[key] || 0), 1)}fr)`)
+    .join(" ");
+  const el = byId("sleeveSummary");
+  el.style.gridTemplateColumns = columns;
+  el.innerHTML = entries.map((key) => `
+    <div class="sleeve-item sleeve-${key}" title="${sleeveLabels[key]} ${fmtPct(summary?.[key] || 0, 1)}">
+      <span>${compact ? sleeveShortLabels[key] : sleeveLabels[key]}</span>
       <strong>${fmtPct(summary?.[key] || 0, 1)}</strong>
     </div>
   `).join("");
@@ -232,5 +245,8 @@ async function runRefresh() {
 }
 
 byId("refreshBtn").addEventListener("click", runRefresh);
+window.addEventListener("resize", () => {
+  if (state.latest) renderSleeveSummary(state.latest.sleeve_summary || {});
+});
 
 loadState().catch((error) => showToast(`加载失败：${error.message}`));
