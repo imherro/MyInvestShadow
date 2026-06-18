@@ -340,6 +340,69 @@ def latest_state() -> dict[str, Any]:
         }
 
 
+def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
+    run = state.get("run") or {}
+    sleeve_weights = state.get("sleeve_summary") or {}
+    metrics = {
+        "nav": run.get("nav"),
+        "active_weight_ratio": run.get("risk_budget_ratio"),
+        "defensive_weight_ratio": run.get("cash_ratio"),
+        "basis_date": run.get("basis_date"),
+    }
+    return {
+        "page": {
+            "title": "MyInvestShadow",
+            "subtitle": "基于市场结果与主线结果的影子账户",
+        },
+        "run": {
+            "id": run.get("id"),
+            "run_at": run.get("run_at"),
+            "basis_date": run.get("basis_date"),
+            "market_basis_date": run.get("market_basis_date"),
+            "theme_report_id": run.get("theme_report_id"),
+            "market_regime": run.get("market_regime"),
+            "risk_budget_ratio": run.get("risk_budget_ratio"),
+            "cash_ratio": run.get("cash_ratio"),
+            "nav": run.get("nav"),
+            "daily_return_ratio": run.get("daily_return_ratio"),
+            "reason": run.get("reason"),
+        },
+        "metrics": metrics,
+        "sleeves": [
+            {"key": "core", "label": "核心仓位", "weight_ratio": sleeve_weights.get("core", 0.0)},
+            {
+                "key": "mainline",
+                "label": "主线仓位",
+                "weight_ratio": sleeve_weights.get("mainline", 0.0),
+            },
+            {
+                "key": "thematic",
+                "label": "主题仓位",
+                "weight_ratio": sleeve_weights.get("thematic", 0.0),
+            },
+            {
+                "key": "defensive",
+                "label": "防御仓位",
+                "weight_ratio": sleeve_weights.get("defensive", 0.0),
+            },
+        ],
+        "sleeve_summary": sleeve_weights,
+        "nav_curve": state.get("nav_curve") or [],
+        "allocations": state.get("allocations") or [],
+        "source_status": state.get("source_status") or [],
+        "links": {
+            "full_state": "/api/latest",
+            "refresh": "/api/run/daily",
+            "nav": "/api/nav",
+            "allocations": "/api/allocations/latest",
+        },
+    }
+
+
+def index_state() -> dict[str, Any]:
+    return build_index_payload(latest_state())
+
+
 def ensure_seed_data() -> None:
     init_db()
     with connect() as conn:

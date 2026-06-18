@@ -14,6 +14,7 @@ from .config import ROOT_DIR, RuntimeConfig
 from .db import init_db
 from .service import (
     ensure_seed_data,
+    index_state,
     latest_state,
     nav_curve,
     run_daily_rebalance,
@@ -81,6 +82,11 @@ def health() -> dict[str, Any]:
 @app.get("/api/latest")
 def api_latest() -> dict[str, Any]:
     return latest_state()
+
+
+@app.get("/api/index")
+def api_index() -> dict[str, Any]:
+    return index_state()
 
 
 @app.post("/api/run/daily")

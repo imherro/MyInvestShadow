@@ -144,7 +144,7 @@ function render(data) {
 }
 
 async function loadState() {
-  const data = await fetchJson("/api/latest");
+  const data = await fetchJson("/api/index");
   render(data);
 }
 
