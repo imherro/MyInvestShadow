@@ -53,6 +53,30 @@
 
       <section class="panel">
         <div class="section-head">
+          <h2>ETF评分/估值门禁</h2>
+          <span id="gateCount">--</span>
+        </div>
+        <div id="gateSummary" class="gate-summary"></div>
+        <div class="table-wrap gate-table">
+          <table>
+            <thead>
+              <tr>
+                <th>代码</th>
+                <th>名称</th>
+                <th>仓位层</th>
+                <th>等级</th>
+                <th>分数</th>
+                <th>落地</th>
+                <th>原因</th>
+              </tr>
+            </thead>
+            <tbody id="gateRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
           <h2>影子目标仓位</h2>
           <span id="allocationCount">--</span>
         </div>
@@ -67,6 +91,7 @@
                 <th>目标</th>
                 <th>调整</th>
                 <th>日涨跌</th>
+                <th>门禁</th>
               </tr>
             </thead>
             <tbody id="allocationRows"></tbody>

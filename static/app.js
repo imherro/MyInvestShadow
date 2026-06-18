@@ -12,6 +12,14 @@ const fmtNav = (value) => {
   return Number(value).toFixed(4);
 };
 
+const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#039;",
+}[char]));
+
 const byId = (id) => document.getElementById(id);
 const sleeveLabels = {
   core: "核心仓位",
@@ -92,7 +100,7 @@ function renderAllocations(rows) {
   byId("allocationCount").textContent = `${rows.length} 个目标`;
   const tbody = byId("allocationRows");
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="7">暂无目标仓位</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8">暂无目标仓位</td></tr>`;
     return;
   }
   tbody.innerHTML = rows.map((row) => {
@@ -100,15 +108,19 @@ function renderAllocations(rows) {
     const pct = Number(row.pct_chg || 0);
     const driftClass = drift >= 0 ? "positive" : "negative";
     const pctClass = pct >= 0 ? "positive" : "negative";
+    const gate = row.etf_gate_grade
+      ? `${row.etf_gate_grade} / ${fmtPct(Number(row.etf_execution_ratio || 0) * 100, 0)}`
+      : "--";
     return `
       <tr>
-        <td>${row.code}</td>
-        <td>${row.name || row.code}</td>
+        <td>${escapeHtml(row.code)}</td>
+        <td>${escapeHtml(row.name || row.code)}</td>
         <td>${sleeveLabels[row.sleeve] || row.sleeve || "--"}</td>
-        <td class="theme-cell">${row.theme || ""}<br><span>${row.stage || ""}</span></td>
+        <td class="theme-cell">${escapeHtml(row.theme || "")}<br><span>${escapeHtml(row.stage || "")}</span></td>
         <td>${fmtPct(row.target_weight_ratio, 2)}</td>
         <td class="${driftClass}">${fmtPct(drift, 2)}</td>
         <td class="${pctClass}">${row.pct_chg === null ? "--" : fmtPct(pct, 2)}</td>
+        <td>${gate}</td>
       </tr>
     `;
   }).join("");
@@ -122,6 +134,61 @@ function renderSleeveSummary(summary) {
       <strong>${fmtPct(summary?.[key] || 0, 1)}</strong>
     </div>
   `).join("");
+}
+
+function renderEtfGate(summary, rows) {
+  const reviewed = Number(summary.reviewed_count || 0);
+  const selected = Number(summary.selected_count || 0);
+  const discounted = Number(summary.discounted_selected_count || 0);
+  const rejected = Number(summary.rejected_count || 0);
+  byId("gateCount").textContent = reviewed ? `${reviewed} 个候选` : "暂无候选";
+  const grades = summary.by_grade || {};
+  byId("gateSummary").innerHTML = ["A", "B", "C", "D"].map((grade) => `
+    <div class="gate-card grade-${grade.toLowerCase()}">
+      <span>${grade}</span>
+      <strong>${Number(grades[grade] || 0)}</strong>
+    </div>
+  `).join("") + `
+    <div class="gate-card">
+      <span>入选</span>
+      <strong>${selected}</strong>
+    </div>
+    <div class="gate-card">
+      <span>折扣</span>
+      <strong>${discounted}</strong>
+    </div>
+    <div class="gate-card">
+      <span>拒绝</span>
+      <strong>${rejected}</strong>
+    </div>
+  `;
+
+  const tbody = byId("gateRows");
+  if (!rows || !rows.length) {
+    tbody.innerHTML = `<tr><td colspan="7">暂无门禁记录</td></tr>`;
+    return;
+  }
+  const ordered = [...rows].sort((a, b) => (
+    Number(Boolean(b.selected)) - Number(Boolean(a.selected))
+    || Number(b.score || 0) - Number(a.score || 0)
+  ));
+  tbody.innerHTML = ordered.map((row) => {
+    const reasonText = [...(row.reasons || []), ...(row.reject_reasons || [])]
+      .slice(0, 3)
+      .join("；");
+    const selectedMark = row.selected ? "已入选" : "";
+    return `
+      <tr class="${row.selected ? "selected-row" : ""}">
+        <td>${escapeHtml(row.code)}</td>
+        <td>${escapeHtml(row.name || row.code)}</td>
+        <td>${sleeveLabels[row.sleeve] || row.sleeve || "--"}</td>
+        <td><span class="grade-pill grade-${String(row.grade || "").toLowerCase()}">${escapeHtml(row.grade || "--")}</span></td>
+        <td>${Number(row.score || 0).toFixed(1)}</td>
+        <td>${fmtPct(Number(row.execution_ratio || 0) * 100, 0)} ${selectedMark}</td>
+        <td class="reason-cell">${escapeHtml(reasonText || "--")}</td>
+      </tr>
+    `;
+  }).join("");
 }
 
 function renderSources(rows) {
@@ -139,6 +206,7 @@ function render(data) {
   renderMetrics(data);
   renderNavChart(data.nav_curve || []);
   renderSleeveSummary(data.sleeve_summary || {});
+  renderEtfGate(data.etf_gate_summary || {}, data.etf_gate || []);
   renderAllocations(data.allocations || []);
   renderSources(data.source_status || []);
 }

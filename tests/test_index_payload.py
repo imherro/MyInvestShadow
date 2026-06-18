@@ -27,6 +27,12 @@ def test_build_index_payload_is_homepage_focused() -> None:
         },
         "nav_curve": [{"basis_date": "2026-06-17", "nav": 1.0123}],
         "allocations": [{"code": "CORE.ASHARE", "target_weight_ratio": 18.0}],
+        "run_payload": {
+            "decision_trace": {
+                "etf_gate_summary": {"reviewed_count": 1, "selected_count": 1},
+                "etf_gate": [{"code": "588170.SH", "grade": "A"}],
+            }
+        },
         "source_status": [{"source": "theme", "ok": 1}],
     }
 
@@ -40,6 +46,8 @@ def test_build_index_payload_is_homepage_focused() -> None:
         "weight_ratio": 18.0,
     }
     assert payload["allocations"][0]["code"] == "CORE.ASHARE"
+    assert payload["etf_gate_summary"]["reviewed_count"] == 1
+    assert payload["etf_gate"][0]["grade"] == "A"
     assert payload["links"]["full_state"] == "/api/latest"
     assert "run_payload" not in payload
     assert "payload_json" not in payload["run"]

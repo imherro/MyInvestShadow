@@ -52,6 +52,15 @@ CREATE TABLE IF NOT EXISTS target_allocations (
     price REAL,
     pct_chg REAL,
     evidence_score REAL,
+    pre_gate_weight_ratio REAL,
+    etf_gate_grade TEXT,
+    etf_gate_score REAL,
+    etf_gate_pass INTEGER,
+    etf_execution_ratio REAL,
+    etf_gate_reasons_json TEXT,
+    etf_gate_reject_reasons_json TEXT,
+    etf_gate_data_gaps_json TEXT,
+    etf_gate_components_json TEXT,
     source_note TEXT NOT NULL
 );
 
@@ -86,6 +95,20 @@ def init_db(db_path: Path = DB_PATH) -> None:
             "sleeve",
             "sleeve TEXT NOT NULL DEFAULT 'mainline'",
         )
+        _ensure_column(conn, "target_allocations", "pre_gate_weight_ratio", "pre_gate_weight_ratio REAL")
+        _ensure_column(conn, "target_allocations", "etf_gate_grade", "etf_gate_grade TEXT")
+        _ensure_column(conn, "target_allocations", "etf_gate_score", "etf_gate_score REAL")
+        _ensure_column(conn, "target_allocations", "etf_gate_pass", "etf_gate_pass INTEGER")
+        _ensure_column(conn, "target_allocations", "etf_execution_ratio", "etf_execution_ratio REAL")
+        _ensure_column(conn, "target_allocations", "etf_gate_reasons_json", "etf_gate_reasons_json TEXT")
+        _ensure_column(
+            conn,
+            "target_allocations",
+            "etf_gate_reject_reasons_json",
+            "etf_gate_reject_reasons_json TEXT",
+        )
+        _ensure_column(conn, "target_allocations", "etf_gate_data_gaps_json", "etf_gate_data_gaps_json TEXT")
+        _ensure_column(conn, "target_allocations", "etf_gate_components_json", "etf_gate_components_json TEXT")
 
 
 def _ensure_column(

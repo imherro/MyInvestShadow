@@ -214,6 +214,76 @@ main {
   border-left: 4px solid #b7791f;
 }
 
+.gate-summary {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.gate-card {
+  min-height: 68px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcfd;
+}
+
+.gate-card span {
+  display: block;
+  color: var(--muted);
+}
+
+.gate-card strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 22px;
+}
+
+.grade-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+.grade-a {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.grade-b {
+  background: #e0f2fe;
+  color: #075985;
+}
+
+.grade-c {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.grade-d {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.selected-row {
+  background: #f5fbf9;
+}
+
+.reason-cell {
+  max-width: 360px;
+  white-space: normal;
+  line-height: 1.45;
+}
+
+.gate-table {
+  max-height: 360px;
+}
+
 .table-wrap {
   width: 100%;
   max-width: 100%;
@@ -305,6 +375,7 @@ tbody tr:last-child td {
   .metrics,
   .grid,
   .status-list,
+  .gate-summary,
   .sleeve-summary {
     grid-template-columns: 1fr;
   }

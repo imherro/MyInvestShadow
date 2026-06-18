@@ -60,6 +60,7 @@ def normalize_theme_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "stage": stage,
                 "evidence_score": evidence_score,
                 "evidence_count": row.get("evidence_count"),
+                "etf_score": row.get("etf_score"),
                 "top_indices": row.get("top_indices") or row.get("top_ths") or row.get("top_sw"),
                 "top_etf": row.get("top_etf") or "",
                 "score_weight_ratio": score_weight_ratio,

@@ -4,10 +4,11 @@ from datetime import date
 from typing import Any
 
 from .allocator import (
+    allocation_candidate_codes,
+    allocation_plan,
     allocation_weight_map,
     market_record,
     sleeve_summary,
-    target_allocations,
 )
 from .db import connect, dumps, init_db, loads, row_to_dict, rows_to_dicts
 from .pricing import PricePoint, fetch_tushare_prices, merge_price_maps, theme_price_fallback
@@ -84,7 +85,10 @@ def _allocations_for_run(conn: Any, run_id: int | None) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT code, name, sleeve, theme, stage, target_weight_ratio, previous_weight_ratio,
-               drift_ratio, price, pct_chg, evidence_score, source_note
+               drift_ratio, price, pct_chg, evidence_score, pre_gate_weight_ratio,
+               etf_gate_grade, etf_gate_score, etf_gate_pass, etf_execution_ratio,
+               etf_gate_reasons_json, etf_gate_reject_reasons_json,
+               etf_gate_data_gaps_json, etf_gate_components_json, source_note
         FROM target_allocations
         WHERE run_id = ?
         ORDER BY
@@ -100,7 +104,18 @@ def _allocations_for_run(conn: Any, run_id: int | None) -> list[dict[str, Any]]:
         """,
         (run_id,),
     ).fetchall()
-    return rows_to_dicts(rows)
+    result = rows_to_dicts(rows)
+    for row in result:
+        row["etf_gate_pass"] = (
+            bool(row["etf_gate_pass"]) if row.get("etf_gate_pass") is not None else None
+        )
+        row["etf_gate_reasons"] = loads(row.pop("etf_gate_reasons_json", None)) or []
+        row["etf_gate_reject_reasons"] = (
+            loads(row.pop("etf_gate_reject_reasons_json", None)) or []
+        )
+        row["etf_gate_data_gaps"] = loads(row.pop("etf_gate_data_gaps_json", None)) or []
+        row["etf_gate_components"] = loads(row.pop("etf_gate_components_json", None)) or {}
+    return result
 
 
 def latest_run(conn: Any) -> dict[str, Any] | None:
@@ -142,9 +157,6 @@ def run_daily_rebalance(reason: str = "manual") -> dict[str, Any]:
             basis_date = date.today().isoformat()
         market_basis_date = extract_market_basis(market_payload)
 
-        preliminary_budget, preliminary_targets = target_allocations(
-            market_payload, theme_payload, {}
-        )
         previous_run = _latest_run_before(conn, basis_date)
         previous_allocations = _allocations_for_run(
             conn, int(previous_run["id"]) if previous_run else None
@@ -152,16 +164,17 @@ def run_daily_rebalance(reason: str = "manual") -> dict[str, Any]:
 
         codes = sorted(
             {
-                row["code"]
-                for row in [*preliminary_targets, *previous_allocations]
-                if row.get("code")
+                *allocation_candidate_codes(market_payload, theme_payload),
+                *(row["code"] for row in previous_allocations if row.get("code")),
             }
         )
         fallback_prices = theme_price_fallback(theme_payload)
         tushare_prices = fetch_tushare_prices(codes, basis_date) if codes else {}
         price_map = merge_price_maps(tushare_prices, fallback_prices)
 
-        risk_budget, targets = target_allocations(market_payload, theme_payload, price_map)
+        plan = allocation_plan(market_payload, theme_payload, price_map)
+        risk_budget = float(plan["risk_budget_ratio"])
+        targets = plan["targets"]
         for row in targets:
             if row["code"] not in price_map and row.get("pct_chg") is not None:
                 price_map[row["code"]] = PricePoint(
@@ -196,6 +209,15 @@ def run_daily_rebalance(reason: str = "manual") -> dict[str, Any]:
             "market_score": record.get("market_position_score"),
             "equity_position_range": record.get("equity_position_range"),
             "sleeve_summary": summary,
+            "market_risk_budget_ratio": plan["market_risk_budget_ratio"],
+            "sleeve_targets_before_gate": plan["sleeve_targets_before_gate"],
+            "executed_active_weight_ratio": risk_budget,
+            "decision_trace": {
+                "market_risk_budget_ratio": plan["market_risk_budget_ratio"],
+                "sleeve_targets_before_gate": plan["sleeve_targets_before_gate"],
+                "etf_gate_summary": plan["etf_gate_summary"],
+                "etf_gate": plan["etf_gate"],
+            },
             "theme_report_id": theme_payload.get("report_id"),
             "basis_date": basis_date,
             "price_sources": {
@@ -238,8 +260,12 @@ def run_daily_rebalance(reason: str = "manual") -> dict[str, Any]:
                 """
                 INSERT INTO target_allocations
                 (run_id, code, name, sleeve, theme, stage, target_weight_ratio,
-                 previous_weight_ratio, drift_ratio, price, pct_chg, evidence_score, source_note)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 previous_weight_ratio, drift_ratio, price, pct_chg, evidence_score,
+                 pre_gate_weight_ratio, etf_gate_grade, etf_gate_score, etf_gate_pass,
+                 etf_execution_ratio, etf_gate_reasons_json,
+                 etf_gate_reject_reasons_json, etf_gate_data_gaps_json,
+                 etf_gate_components_json, source_note)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -254,6 +280,21 @@ def run_daily_rebalance(reason: str = "manual") -> dict[str, Any]:
                     row.get("price"),
                     row.get("pct_chg"),
                     row.get("evidence_score"),
+                    row.get("pre_gate_weight_ratio"),
+                    row.get("etf_gate_grade"),
+                    row.get("etf_gate_score"),
+                    (
+                        1
+                        if row.get("etf_gate_pass") is True
+                        else 0
+                        if row.get("etf_gate_pass") is False
+                        else None
+                    ),
+                    row.get("etf_execution_ratio"),
+                    dumps(row.get("etf_gate_reasons") or []),
+                    dumps(row.get("etf_gate_reject_reasons") or []),
+                    dumps(row.get("etf_gate_data_gaps") or []),
+                    dumps(row.get("etf_gate_components") or {}),
                     row.get("source_note") or "",
                 ),
             )
@@ -278,6 +319,7 @@ def run_daily_rebalance(reason: str = "manual") -> dict[str, Any]:
         run = latest_run(conn) or {}
         return {
             "run": run,
+            "run_payload": loads(run["payload_json"]) if run else None,
             "allocations": _allocations_for_run(conn, run_id),
             "sleeve_summary": summary,
             "nav_curve": nav_curve(conn),
@@ -342,6 +384,8 @@ def latest_state() -> dict[str, Any]:
 
 def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
     run = state.get("run") or {}
+    run_payload = state.get("run_payload") or {}
+    decision_trace = run_payload.get("decision_trace") or {}
     sleeve_weights = state.get("sleeve_summary") or {}
     metrics = {
         "nav": run.get("nav"),
@@ -387,6 +431,8 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
             },
         ],
         "sleeve_summary": sleeve_weights,
+        "etf_gate_summary": decision_trace.get("etf_gate_summary") or {},
+        "etf_gate": decision_trace.get("etf_gate") or [],
         "nav_curve": state.get("nav_curve") or [],
         "allocations": state.get("allocations") or [],
         "source_status": state.get("source_status") or [],

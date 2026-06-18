@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from shadow_app.allocator import (
+    allocation_plan,
     extract_etf_candidates,
     risk_budget_from_market,
     sleeve_summary,
     target_allocations,
 )
+from shadow_app.pricing import PricePoint
 from shadow_app.upstream import normalize_theme_payload
 
 
@@ -50,6 +52,7 @@ def test_normalize_theme_api_latest_shape() -> None:
     assert result["basis_date"] == "2026-06-17"
     assert result["report_id"] == "mainline_review_x"
     assert result["theme_signals"][0]["score_weight_ratio"] == 90
+    assert result["theme_signals"][0]["etf_score"] is None
     assert result["theme_signals"][1]["score_weight_ratio"] == 0.0
     assert result["market_context"]["broad_indexes"][0]["code"] == "000300.SH"
 
@@ -113,7 +116,43 @@ def test_target_allocations_use_four_sleeves() -> None:
         ]
     }
 
-    budget, rows = target_allocations(market_payload, theme_payload, {})
+    price_map = {
+        "588170.SH": PricePoint(
+            code="588170.SH",
+            close=1.1,
+            pct_chg=1.2,
+            source="test",
+            amount=500_000,
+            r5=5.0,
+            r20=9.0,
+            amount_rank=0.9,
+            premium_rate=0.1,
+        ),
+        "159516.SZ": PricePoint(
+            code="159516.SZ",
+            close=1.0,
+            pct_chg=1.0,
+            source="test",
+            amount=300_000,
+            r5=2.0,
+            r20=6.0,
+            amount_rank=0.7,
+            premium_rate=0.2,
+        ),
+        "515050.SH": PricePoint(
+            code="515050.SH",
+            close=1.0,
+            pct_chg=1.0,
+            source="test",
+            amount=300_000,
+            r5=4.0,
+            r20=8.0,
+            amount_rank=0.85,
+            premium_rate=0.2,
+        ),
+    }
+
+    budget, rows = target_allocations(market_payload, theme_payload, price_map)
     summary = sleeve_summary(rows)
 
     assert round(budget, 2) == 36.0
@@ -131,3 +170,83 @@ def test_target_allocations_use_four_sleeves() -> None:
         "515050.SH",
         "DEFENSIVE.CASH",
     ]
+    assert rows[1]["etf_gate_grade"] == "A"
+    assert rows[1]["etf_execution_ratio"] == 1.0
+
+
+def test_etf_gate_moves_missing_data_to_defensive() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "35%-45%",
+                    "market_position_score": 46.98,
+                }
+            }
+        }
+    }
+    theme_payload = {
+        "theme_signals": [
+            {
+                "theme": "硬科技电子/半导体",
+                "stage": "主线确认",
+                "score_weight_ratio": 90,
+                "evidence_score": 90,
+                "top_etf": "588170.SH 华夏半导体ETF",
+            }
+        ]
+    }
+
+    plan = allocation_plan(market_payload, theme_payload, {})
+    summary = sleeve_summary(plan["targets"])
+
+    assert round(plan["market_risk_budget_ratio"], 2) == 36.0
+    assert round(plan["risk_budget_ratio"], 2) == 18.0
+    assert summary["mainline"] == 0.0
+    assert summary["defensive"] == 82.0
+    assert plan["etf_gate"][0]["grade"] == "D"
+    assert "缺少可验证交易数据" in plan["etf_gate"][0]["reject_reasons"]
+
+
+def test_etf_gate_discounts_overheated_candidate() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "35%-45%",
+                    "market_position_score": 46.98,
+                }
+            }
+        }
+    }
+    theme_payload = {
+        "theme_signals": [
+            {
+                "theme": "硬科技电子/半导体",
+                "stage": "主线确认",
+                "score_weight_ratio": 90,
+                "evidence_score": 90,
+                "top_etf": "588170.SH 热门ETF",
+            }
+        ]
+    }
+    price_map = {
+        "588170.SH": PricePoint(
+            code="588170.SH",
+            close=1.0,
+            pct_chg=9.0,
+            source="test",
+            amount=500_000,
+            r5=25.0,
+            r20=45.0,
+            amount_rank=0.9,
+        )
+    }
+
+    plan = allocation_plan(market_payload, theme_payload, price_map)
+    rows = {row["code"]: row for row in plan["targets"]}
+
+    assert plan["etf_gate"][0]["grade"] == "C"
+    assert plan["etf_gate"][0]["execution_ratio"] == 0.45
+    assert round(rows["588170.SH"]["target_weight_ratio"], 4) == 6.7505
+    assert round(rows["DEFENSIVE.CASH"]["target_weight_ratio"], 4) == 75.2495
