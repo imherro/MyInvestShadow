@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from .allocator import (
     allocation_weight_map,
-    compare_actual_to_target,
     market_record,
+    sleeve_summary,
     target_allocations,
 )
 from .db import connect, dumps, init_db, loads, row_to_dict, rows_to_dicts
-from .pricing import fetch_tushare_prices, merge_price_maps, theme_price_fallback
+from .pricing import PricePoint, fetch_tushare_prices, merge_price_maps, theme_price_fallback
 from .upstream import SourceSnapshot, extract_market_basis, fetch_market_and_theme, now_iso
 
 
@@ -83,22 +83,24 @@ def _allocations_for_run(conn: Any, run_id: int | None) -> list[dict[str, Any]]:
         return []
     rows = conn.execute(
         """
-        SELECT code, name, theme, stage, target_weight_ratio, previous_weight_ratio,
+        SELECT code, name, sleeve, theme, stage, target_weight_ratio, previous_weight_ratio,
                drift_ratio, price, pct_chg, evidence_score, source_note
         FROM target_allocations
         WHERE run_id = ?
-        ORDER BY target_weight_ratio DESC, code ASC
+        ORDER BY
+            CASE sleeve
+                WHEN 'core' THEN 0
+                WHEN 'mainline' THEN 1
+                WHEN 'thematic' THEN 2
+                WHEN 'defensive' THEN 3
+                ELSE 9
+            END,
+            target_weight_ratio DESC,
+            code ASC
         """,
         (run_id,),
     ).fetchall()
     return rows_to_dicts(rows)
-
-
-def _latest_target_rows(conn: Any) -> list[dict[str, Any]]:
-    run = latest_run(conn)
-    if not run:
-        return []
-    return _allocations_for_run(conn, int(run["id"]))
 
 
 def latest_run(conn: Any) -> dict[str, Any] | None:
@@ -160,6 +162,14 @@ def run_daily_rebalance(reason: str = "manual") -> dict[str, Any]:
         price_map = merge_price_maps(tushare_prices, fallback_prices)
 
         risk_budget, targets = target_allocations(market_payload, theme_payload, price_map)
+        for row in targets:
+            if row["code"] not in price_map and row.get("pct_chg") is not None:
+                price_map[row["code"]] = PricePoint(
+                    code=row["code"],
+                    close=row.get("price"),
+                    pct_chg=row.get("pct_chg"),
+                    source=row.get("source_note") or "allocation.synthetic",
+                )
         previous_weights = allocation_weight_map(previous_allocations)
         for row in targets:
             previous_weight = previous_weights.get(row["code"], 0.0)
@@ -174,8 +184,8 @@ def run_daily_rebalance(reason: str = "manual") -> dict[str, Any]:
             else 0.0
         )
         nav = previous_nav * (1.0 + daily_return)
-        target_sum = sum(float(row.get("target_weight_ratio") or 0.0) for row in targets)
-        cash_ratio = max(0.0, 100.0 - target_sum)
+        summary = sleeve_summary(targets)
+        cash_ratio = summary["defensive"]
         record = market_record(market_payload)
 
         payload = {
@@ -185,6 +195,7 @@ def run_daily_rebalance(reason: str = "manual") -> dict[str, Any]:
             "theme_fetch_error": theme_snapshot.error,
             "market_score": record.get("market_position_score"),
             "equity_position_range": record.get("equity_position_range"),
+            "sleeve_summary": summary,
             "theme_report_id": theme_payload.get("report_id"),
             "basis_date": basis_date,
             "price_sources": {
@@ -226,14 +237,15 @@ def run_daily_rebalance(reason: str = "manual") -> dict[str, Any]:
             conn.execute(
                 """
                 INSERT INTO target_allocations
-                (run_id, code, name, theme, stage, target_weight_ratio,
+                (run_id, code, name, sleeve, theme, stage, target_weight_ratio,
                  previous_weight_ratio, drift_ratio, price, pct_chg, evidence_score, source_note)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
                     row["code"],
                     row["name"],
+                    row.get("sleeve") or "mainline",
                     row["theme"],
                     row["stage"],
                     float(row.get("target_weight_ratio") or 0.0),
@@ -267,6 +279,7 @@ def run_daily_rebalance(reason: str = "manual") -> dict[str, Any]:
         return {
             "run": run,
             "allocations": _allocations_for_run(conn, run_id),
+            "sleeve_summary": summary,
             "nav_curve": nav_curve(conn),
             "source_status": source_status(conn),
         }
@@ -317,72 +330,14 @@ def latest_state() -> dict[str, Any]:
     with connect() as conn:
         run = latest_run(conn)
         allocations = _allocations_for_run(conn, int(run["id"]) if run else None)
-        actual = latest_actual(conn)
-        comparison = (
-            compare_actual_to_target(actual.get("holdings", []), allocations)
-            if actual
-            else []
-        )
         return {
             "run": run,
             "run_payload": loads(run["payload_json"]) if run else None,
             "allocations": allocations,
+            "sleeve_summary": sleeve_summary(allocations),
             "nav_curve": nav_curve(conn),
             "source_status": source_status(conn),
-            "actual_holdings": actual,
-            "comparison": comparison,
         }
-
-
-def save_actual_holdings(
-    holdings: list[dict[str, Any]], as_of_date: str | None = None, source: str = "manual"
-) -> dict[str, Any]:
-    init_db()
-    as_of_date = as_of_date or date.today().isoformat()
-    normalized = []
-    for row in holdings:
-        code = str(row.get("code") or "").strip().upper()
-        if not code:
-            continue
-        normalized.append(
-            {
-                "code": code,
-                "name": str(row.get("name") or code).strip(),
-                "theme": str(row.get("theme") or "").strip(),
-                "weight_ratio": float(row.get("weight_ratio") or 0.0),
-            }
-        )
-    payload = {"as_of_date": as_of_date, "source": source, "holdings": normalized}
-    with connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO actual_holdings (as_of_date, source, created_at, payload_json)
-            VALUES (?, ?, ?, ?)
-            """,
-            (as_of_date, source, now_iso(), dumps(payload)),
-        )
-        targets = _latest_target_rows(conn)
-        comparison = compare_actual_to_target(normalized, targets)
-        conn.commit()
-    return {"actual_holdings": payload, "comparison": comparison}
-
-
-def latest_actual(conn: Any | None = None) -> dict[str, Any] | None:
-    should_close = conn is None
-    conn = conn or connect()
-    try:
-        row = conn.execute(
-            """
-            SELECT payload_json
-            FROM actual_holdings
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
-        return loads(row["payload_json"]) if row else None
-    finally:
-        if should_close:
-            conn.close()
 
 
 def ensure_seed_data() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 from .config import get_tushare_token
@@ -13,6 +14,9 @@ class PricePoint:
     pct_chg: float | None
     source: str
     error: str | None = None
+
+
+MARKET_CODE_RE = re.compile(r"^\d{6}\.(?:SH|SZ|BJ)$")
 
 
 def _safe_float(value: Any) -> float | None:
@@ -50,11 +54,25 @@ def _fetch_tushare_one(pro: Any, code: str, trade_date: str) -> PricePoint:
 
 
 def fetch_tushare_prices(codes: list[str], basis_date: str) -> dict[str, PricePoint]:
+    synthetic = {
+        code: PricePoint(
+            code=code,
+            close=None,
+            pct_chg=0.0 if code == "DEFENSIVE.CASH" else None,
+            source="synthetic",
+            error=None,
+        )
+        for code in codes
+        if not MARKET_CODE_RE.match(code)
+    }
+    market_codes = [code for code in codes if MARKET_CODE_RE.match(code)]
+    if not market_codes:
+        return synthetic
     token = get_tushare_token()
     if not token:
-        return {
+        return synthetic | {
             code: PricePoint(code=code, close=None, pct_chg=None, source="unavailable", error="missing Tushare token")
-            for code in codes
+            for code in market_codes
         }
     try:
         import tushare as ts
@@ -62,7 +80,7 @@ def fetch_tushare_prices(codes: list[str], basis_date: str) -> dict[str, PricePo
         ts.set_token(token)
         pro = ts.pro_api(token)
     except Exception as exc:  # pragma: no cover - depends on installed runtime
-        return {
+        return synthetic | {
             code: PricePoint(
                 code=code,
                 close=None,
@@ -70,11 +88,11 @@ def fetch_tushare_prices(codes: list[str], basis_date: str) -> dict[str, PricePo
                 source="unavailable",
                 error=f"{type(exc).__name__}: {exc}",
             )
-            for code in codes
+            for code in market_codes
         }
 
     trade_date = _trade_date_compact(basis_date)
-    return {code: _fetch_tushare_one(pro, code, trade_date) for code in codes}
+    return synthetic | {code: _fetch_tushare_one(pro, code, trade_date) for code in market_codes}
 
 
 def theme_price_fallback(theme_payload: dict[str, Any]) -> dict[str, PricePoint]:

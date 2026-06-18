@@ -9,7 +9,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field
 
 from .config import ROOT_DIR, RuntimeConfig
 from .db import init_db
@@ -18,7 +17,6 @@ from .service import (
     latest_state,
     nav_curve,
     run_daily_rebalance,
-    save_actual_holdings,
     source_status,
 )
 
@@ -29,19 +27,6 @@ templates = Jinja2Templates(directory=ROOT_DIR / "templates")
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 _last_scheduled_day: str | None = None
-
-
-class HoldingInput(BaseModel):
-    code: str = Field(..., description="证券代码，例如 588170.SH")
-    name: str | None = None
-    weight_ratio: float = Field(..., ge=0, le=100, description="持仓权重百分比")
-    theme: str | None = None
-
-
-class ActualHoldingsInput(BaseModel):
-    as_of_date: str | None = None
-    source: str = "manual"
-    holdings: list[HoldingInput]
 
 
 async def _startup_seed() -> None:
@@ -93,8 +78,8 @@ def health() -> dict[str, Any]:
     }
 
 
-@app.get("/api/state")
-def api_state() -> dict[str, Any]:
+@app.get("/api/latest")
+def api_latest() -> dict[str, Any]:
     return latest_state()
 
 
@@ -119,21 +104,6 @@ def api_allocations_latest() -> dict[str, Any]:
     return {
         "run": state.get("run"),
         "allocations": state.get("allocations", []),
+        "sleeve_summary": state.get("sleeve_summary", {}),
         "cash_ratio": (state.get("run") or {}).get("cash_ratio"),
-    }
-
-
-@app.post("/api/actual-holdings")
-def api_actual_holdings(payload: ActualHoldingsInput) -> dict[str, Any]:
-    holdings = [item.dict() for item in payload.holdings]
-    return save_actual_holdings(holdings, payload.as_of_date, payload.source)
-
-
-@app.get("/api/compare/latest")
-def api_compare_latest() -> dict[str, Any]:
-    state = latest_state()
-    return {
-        "run": state.get("run"),
-        "actual_holdings": state.get("actual_holdings"),
-        "comparison": state.get("comparison", []),
     }

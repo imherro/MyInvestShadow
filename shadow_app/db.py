@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS target_allocations (
     run_id INTEGER NOT NULL REFERENCES shadow_runs(id) ON DELETE CASCADE,
     code TEXT NOT NULL,
     name TEXT NOT NULL,
+    sleeve TEXT NOT NULL DEFAULT 'mainline',
     theme TEXT NOT NULL,
     stage TEXT NOT NULL,
     target_weight_ratio REAL NOT NULL,
@@ -64,14 +65,6 @@ CREATE TABLE IF NOT EXISTS nav_points (
     run_id INTEGER NOT NULL REFERENCES shadow_runs(id),
     created_at TEXT NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS actual_holdings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    as_of_date TEXT NOT NULL,
-    source TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    payload_json TEXT NOT NULL
-);
 """
 
 
@@ -86,6 +79,21 @@ def connect(db_path: Path = DB_PATH) -> sqlite3.Connection:
 def init_db(db_path: Path = DB_PATH) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        conn.execute("DROP TABLE IF EXISTS actual_holdings")
+        _ensure_column(
+            conn,
+            "target_allocations",
+            "sleeve",
+            "sleeve TEXT NOT NULL DEFAULT 'mainline'",
+        )
+
+
+def _ensure_column(
+    conn: sqlite3.Connection, table: str, column: str, column_definition: str
+) -> None:
+    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_definition}")
 
 
 def row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:

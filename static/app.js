@@ -13,6 +13,12 @@ const fmtNav = (value) => {
 };
 
 const byId = (id) => document.getElementById(id);
+const sleeveLabels = {
+  core: "核心仓位",
+  mainline: "主线仓位",
+  thematic: "主题仓位",
+  defensive: "防御仓位",
+};
 
 function showToast(message) {
   const el = byId("toast");
@@ -86,7 +92,7 @@ function renderAllocations(rows) {
   byId("allocationCount").textContent = `${rows.length} 个目标`;
   const tbody = byId("allocationRows");
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="6">暂无目标仓位</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7">暂无目标仓位</td></tr>`;
     return;
   }
   tbody.innerHTML = rows.map((row) => {
@@ -98,6 +104,7 @@ function renderAllocations(rows) {
       <tr>
         <td>${row.code}</td>
         <td>${row.name || row.code}</td>
+        <td>${sleeveLabels[row.sleeve] || row.sleeve || "--"}</td>
         <td class="theme-cell">${row.theme || ""}<br><span>${row.stage || ""}</span></td>
         <td>${fmtPct(row.target_weight_ratio, 2)}</td>
         <td class="${driftClass}">${fmtPct(drift, 2)}</td>
@@ -107,26 +114,14 @@ function renderAllocations(rows) {
   }).join("");
 }
 
-function renderComparison(rows) {
-  const tbody = byId("compareRows");
-  if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="6">提交真实持仓后显示对照</td></tr>`;
-    return;
-  }
-  tbody.innerHTML = rows.map((row) => {
-    const diff = Number(row.difference_ratio || 0);
-    const diffClass = Math.abs(diff) <= 0.5 ? "" : diff > 0 ? "negative" : "positive";
-    return `
-      <tr>
-        <td>${row.code}</td>
-        <td>${row.name || row.code}</td>
-        <td>${fmtPct(row.actual_weight_ratio, 2)}</td>
-        <td>${fmtPct(row.target_weight_ratio, 2)}</td>
-        <td class="${diffClass}">${fmtPct(diff, 2)}</td>
-        <td>${row.status}</td>
-      </tr>
-    `;
-  }).join("");
+function renderSleeveSummary(summary) {
+  const entries = ["core", "mainline", "thematic", "defensive"];
+  byId("sleeveSummary").innerHTML = entries.map((key) => `
+    <div class="sleeve-item sleeve-${key}">
+      <span>${sleeveLabels[key]}</span>
+      <strong>${fmtPct(summary?.[key] || 0, 1)}</strong>
+    </div>
+  `).join("");
 }
 
 function renderSources(rows) {
@@ -143,13 +138,13 @@ function render(data) {
   state.latest = data;
   renderMetrics(data);
   renderNavChart(data.nav_curve || []);
+  renderSleeveSummary(data.sleeve_summary || {});
   renderAllocations(data.allocations || []);
-  renderComparison(data.comparison || []);
   renderSources(data.source_status || []);
 }
 
 async function loadState() {
-  const data = await fetchJson("/api/state");
+  const data = await fetchJson("/api/latest");
   render(data);
 }
 
@@ -168,25 +163,6 @@ async function runRefresh() {
   }
 }
 
-async function submitHoldings() {
-  const button = byId("submitHoldingsBtn");
-  setButtonLoading(button, true);
-  try {
-    const payload = JSON.parse(byId("holdingsInput").value);
-    const data = await fetchJson("/api/actual-holdings", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-    renderComparison(data.comparison || []);
-    showToast("真实持仓对照已更新");
-  } catch (error) {
-    showToast(`提交失败：${error.message}`);
-  } finally {
-    setButtonLoading(button, false);
-  }
-}
-
 byId("refreshBtn").addEventListener("click", runRefresh);
-byId("submitHoldingsBtn").addEventListener("click", submitHoldings);
 
 loadState().catch((error) => showToast(`加载失败：${error.message}`));

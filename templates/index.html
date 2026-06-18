@@ -22,11 +22,11 @@
           <strong id="navValue">--</strong>
         </div>
         <div class="metric">
-          <span>权益目标</span>
+          <span>主动仓位</span>
           <strong id="riskBudget">--</strong>
         </div>
         <div class="metric">
-          <span>现金保留</span>
+          <span>防御仓位</span>
           <strong id="cashRatio">--</strong>
         </div>
         <div class="metric">
@@ -43,56 +43,34 @@
         <div id="navChart" class="chart" role="img" aria-label="影子账户净值曲线"></div>
       </section>
 
-      <section class="grid">
-        <div class="panel">
-          <div class="section-head">
-            <h2>影子目标仓位</h2>
-            <span id="allocationCount">--</span>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>代码</th>
-                  <th>名称</th>
-                  <th>主题</th>
-                  <th>目标</th>
-                  <th>调整</th>
-                  <th>日涨跌</th>
-                </tr>
-              </thead>
-              <tbody id="allocationRows"></tbody>
-            </table>
-          </div>
+      <section class="band">
+        <div class="section-head">
+          <h2>仓位结构</h2>
+          <span>核心 / 主线 / 主题 / 防御</span>
         </div>
+        <div id="sleeveSummary" class="sleeve-summary"></div>
+      </section>
 
-        <div class="panel">
-          <div class="section-head">
-            <h2>真实持仓对照</h2>
-            <button id="submitHoldingsBtn" type="button" title="提交真实持仓权重用于对照">提交</button>
-          </div>
-          <textarea id="holdingsInput" spellcheck="false">{
-  "as_of_date": "2026-06-17",
-  "source": "manual",
-  "holdings": [
-    {"code": "588170.SH", "name": "示例ETF", "weight_ratio": 8.0}
-  ]
-}</textarea>
-          <div class="table-wrap compare-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>代码</th>
-                  <th>名称</th>
-                  <th>实际</th>
-                  <th>影子</th>
-                  <th>差异</th>
-                  <th>状态</th>
-                </tr>
-              </thead>
-              <tbody id="compareRows"></tbody>
-            </table>
-          </div>
+      <section class="panel">
+        <div class="section-head">
+          <h2>影子目标仓位</h2>
+          <span id="allocationCount">--</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>代码</th>
+                <th>名称</th>
+                <th>仓位层</th>
+                <th>主题</th>
+                <th>目标</th>
+                <th>调整</th>
+                <th>日涨跌</th>
+              </tr>
+            </thead>
+            <tbody id="allocationRows"></tbody>
+          </table>
         </div>
       </section>
 

@@ -38,6 +38,56 @@ def fetch_json(url: str) -> dict[str, Any]:
         return response.json()
 
 
+def normalize_theme_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("theme_signals"):
+        return payload
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return payload
+    ranking = result.get("theme_ranking") or []
+    theme_signals: list[dict[str, Any]] = []
+    for index, row in enumerate(ranking, start=1):
+        stage = str(row.get("stage") or "")
+        try:
+            evidence_score = float(row.get("evidence_score") or 0.0)
+        except (TypeError, ValueError):
+            evidence_score = 0.0
+        score_weight_ratio = 0.0 if "弱势" in stage or "退潮" in stage else evidence_score
+        theme_signals.append(
+            {
+                "rank": row.get("rank") or index,
+                "theme": row.get("theme") or "",
+                "stage": stage,
+                "evidence_score": evidence_score,
+                "evidence_count": row.get("evidence_count"),
+                "top_indices": row.get("top_indices") or row.get("top_ths") or row.get("top_sw"),
+                "top_etf": row.get("top_etf") or "",
+                "score_weight_ratio": score_weight_ratio,
+            }
+        )
+
+    return {
+        "schema_version": "mainline_latest_for_shadow_account.v1",
+        "mode": "simulation_input",
+        "report_id": payload.get("report_id"),
+        "basis_date": result.get("basis_date"),
+        "generated_at": result.get("generated_at"),
+        "constraints": {
+            "read_only": True,
+            "ratio_only": True,
+            "contains_trade_orders": False,
+            "contains_cash_amounts": False,
+            "source": "theme.okbbc.com/api/latest",
+        },
+        "market_context": {
+            "breadth": result.get("breadth"),
+            "broad_indexes": result.get("broad_indexes") or [],
+        },
+        "theme_signals": theme_signals,
+        "latest_result": result,
+    }
+
+
 def extract_market_basis(payload: dict[str, Any]) -> str | None:
     results = payload.get("results") or {}
     snapshot = results.get("market_snapshot") or {}
@@ -51,6 +101,8 @@ def extract_market_basis(payload: dict[str, Any]) -> str | None:
 
 
 def make_snapshot(source: str, payload: dict[str, Any]) -> SourceSnapshot:
+    if source == "theme":
+        payload = normalize_theme_payload(payload)
     basis_date = payload.get("basis_date")
     if source == "market":
         basis_date = extract_market_basis(payload)

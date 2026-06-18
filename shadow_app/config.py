@@ -14,7 +14,7 @@ MARKET_API_URL = os.getenv(
     "MARKET_API_URL", "https://market.okbbc.com//api/research/latest"
 )
 THEME_API_URL = os.getenv(
-    "THEME_API_URL", "https://theme.okbbc.com/api/shadow-account/latest"
+    "THEME_API_URL", "https://theme.okbbc.com/api/latest"
 )
 
 HTTP_HEADERS = {
