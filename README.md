@@ -315,6 +315,7 @@ static/
 templates/
   index.html        首页模板
 tests/
+  test_system_stability.py regime sweep、ETF 池崩塌、噪声扰动和确定性压力测试
   test_position_sizer.py 总仓位函数边界、confidence、regime 和确定性测试
   test_structure_guard.py 结构守恒和 safe mode 测试
   test_gate_filter.py ETF 前置过滤测试
@@ -333,6 +334,7 @@ python -m pytest -q
 当前测试覆盖重点：
 
 - 主线/主题仓位拆分
+- 系统稳定性：regime sweep、ETF universe collapse、signal noise、100 次确定性重复
 - 总仓位函数的 score 边界、confidence 调整、regime 调整和确定性
 - ETF 门禁前置过滤，不做仓位缩放
 - 结构守恒、非核心池重分配和 safe mode
@@ -358,6 +360,7 @@ python -m pytest -q
 - ETF 门禁是否会因为数据缺失而误判为通过。
 - 门禁过滤掉的主动预算是否没有隐性回补核心 ETF。
 - 有效 ETF 池为空时是否触发 `safe_mode_triggered` 并提高防御仓位。
+- 在 bull/neutral/crash/low-liquidity、ETF 池崩塌和信号噪声下是否仍无结构漂移。
 - `/api/run/daily` 是否在外部监听时受到令牌保护。
 - 页面和 API 是否保持 ratio-only。
 
