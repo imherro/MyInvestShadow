@@ -24,25 +24,19 @@ CORE_ETF_BASKET = (
         "code": "510300.SH",
         "name": "华泰柏瑞沪深300ETF",
         "theme": "核心-沪深300",
-        "weight": 0.45,
+        "weight": 0.60,
     },
     {
         "code": "510500.SH",
         "name": "南方中证500ETF",
         "theme": "核心-中证500",
-        "weight": 0.25,
-    },
-    {
-        "code": "510210.SH",
-        "name": "富国上证综指ETF",
-        "theme": "核心-上证综指",
-        "weight": 0.15,
+        "weight": 0.30,
     },
     {
         "code": "159915.SZ",
         "name": "易方达创业板ETF",
         "theme": "核心-创业板",
-        "weight": 0.15,
+        "weight": 0.10,
     },
 )
 DEFENSIVE_ETF = {

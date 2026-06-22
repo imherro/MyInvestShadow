@@ -169,19 +169,18 @@ def test_target_allocations_use_four_sleeves() -> None:
     assert [row["code"] for row in rows] == [
         "510300.SH",
         "510500.SH",
-        "510210.SH",
         "159915.SZ",
         "588170.SH",
         "515050.SH",
         DEFENSIVE_ETF["code"],
     ]
     assert rows[0]["name"] == "华泰柏瑞沪深300ETF"
-    assert rows[0]["target_weight_ratio"] == 8.1
+    assert round(rows[0]["target_weight_ratio"], 4) == 10.8
     assert rows[-1]["name"] == "银华货币ETF-A"
     assert all(row["instrument_type"] == "etf" for row in rows)
     assert all(row["is_synthetic"] is False for row in rows)
-    assert rows[4]["etf_gate_grade"] == "A"
-    assert rows[4]["etf_execution_ratio"] == 1.0
+    assert rows[3]["etf_gate_grade"] == "A"
+    assert rows[3]["etf_execution_ratio"] == 1.0
 
 
 def test_etf_gate_moves_missing_data_to_defensive() -> None:
@@ -270,11 +269,10 @@ def test_legacy_core_return_uses_core_etf_basket() -> None:
         {
             "510300.SH": PricePoint("510300.SH", 1.0, 1.0, "test"),
             "510500.SH": PricePoint("510500.SH", 1.0, 2.0, "test"),
-            "510210.SH": PricePoint("510210.SH", 1.0, -1.0, "test"),
             "159915.SZ": PricePoint("159915.SZ", 1.0, 3.0, "test"),
         }
     )
 
     assert point is not None
     assert point.code == "CORE.ASHARE"
-    assert round(point.pct_chg or 0.0, 4) == 1.25
+    assert round(point.pct_chg or 0.0, 4) == 1.5

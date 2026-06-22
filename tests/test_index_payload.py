@@ -26,7 +26,7 @@ def test_build_index_payload_is_homepage_focused() -> None:
             "defensive": 64.0,
         },
         "nav_curve": [{"basis_date": "2026-06-17", "nav": 1.0123}],
-        "allocations": [{"code": "510300.SH", "target_weight_ratio": 8.1}],
+        "allocations": [{"code": "510300.SH", "target_weight_ratio": 10.8}],
         "rebalance_history": [
             {
                 "basis_date": "2026-06-17",
