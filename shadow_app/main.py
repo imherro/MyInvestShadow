@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -28,8 +28,23 @@ app.mount("/static", StaticFiles(directory=ROOT_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT_DIR / "templates")
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 _successful_scheduled_day: str | None = None
 _attempted_schedule_slots: set[str] = set()
+_refresh_lock = asyncio.Lock()
+
+
+def _is_loopback_host(host: str) -> bool:
+    return host.lower() in LOOPBACK_HOSTS
+
+
+def _validate_mutation_access(x_shadow_token: str | None) -> None:
+    if config.api_token:
+        if x_shadow_token != config.api_token:
+            raise HTTPException(status_code=403, detail="缺少或错误的影子账户写入令牌")
+        return
+    if not _is_loopback_host(config.host):
+        raise HTTPException(status_code=403, detail="非本机监听必须配置 SHADOW_API_TOKEN")
 
 
 def _schedule_slot_key(
@@ -91,10 +106,13 @@ async def _scheduled_refresh_loop() -> None:
         )
         if not slot_key:
             continue
+        if _refresh_lock.locked():
+            continue
         _attempted_schedule_slots.add(slot_key)
         slot = slot_key.split(":", 1)[1]
         try:
-            await asyncio.to_thread(run_daily_rebalance, f"scheduled_evening_refresh_{slot}")
+            async with _refresh_lock:
+                await asyncio.to_thread(run_daily_rebalance, f"scheduled_evening_refresh_{slot}")
             _successful_scheduled_day = day
         except Exception:
             continue
@@ -133,8 +151,12 @@ def api_index() -> dict[str, Any]:
 
 
 @app.post("/api/run/daily")
-def api_run_daily() -> dict[str, Any]:
-    return run_daily_rebalance(reason="manual_api")
+async def api_run_daily(x_shadow_token: str | None = Header(default=None)) -> dict[str, Any]:
+    _validate_mutation_access(x_shadow_token)
+    if _refresh_lock.locked():
+        raise HTTPException(status_code=409, detail="影子仓位刷新正在运行")
+    async with _refresh_lock:
+        return await asyncio.to_thread(run_daily_rebalance, reason="manual_api")
 
 
 @app.get("/api/nav")

@@ -454,7 +454,7 @@ def _thematic_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
         candidates,
         key=lambda item: (
             -float(item.get("evidence_score") or 0.0),
-            int(item.get("rank") or 999),
+            _safe_rank(item),
         ),
     )[:8]
 
@@ -598,14 +598,7 @@ def _distribute_thematic_budget(
         key=lambda row: (
             -float(row.get("thematic_priority_score") or 0.0),
             -float(row.get("market_performance_score") or 0.0),
-            int(next(
-                (
-                    signal.get("rank") or 999
-                    for signal in signals
-                    if signal.get("theme") == row.get("theme")
-                ),
-                999,
-            )),
+            _safe_rank({"rank": row.get("direction_rank")}),
             str(row.get("code") or ""),
         ),
     )

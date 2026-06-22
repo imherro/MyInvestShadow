@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import date
 from typing import Any
 
 from .allocator import (
@@ -51,6 +50,45 @@ def _latest_ok_payload(conn: Any, source: str) -> dict[str, Any] | None:
     if not row:
         return None
     return loads(row["payload_json"])
+
+
+def _run_payloads_from_snapshots(
+    conn: Any,
+    market_snapshot: SourceSnapshot,
+    theme_snapshot: SourceSnapshot,
+    *,
+    allow_stale: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any], str, str]:
+    if allow_stale:
+        market_payload = market_snapshot.payload if market_snapshot.ok else _latest_ok_payload(conn, "market")
+        theme_payload = theme_snapshot.payload if theme_snapshot.ok else _latest_ok_payload(conn, "theme")
+        if not market_payload or not theme_payload:
+            raise RuntimeError("上游接口不可用，且本地没有可回退的历史快照")
+    else:
+        errors = []
+        if not market_snapshot.ok:
+            errors.append(f"market={market_snapshot.error or 'fetch_failed'}")
+        if not theme_snapshot.ok:
+            errors.append(f"theme={theme_snapshot.error or 'fetch_failed'}")
+        if errors:
+            raise RuntimeError("上游接口不可用，已停止生成正式影子仓位: " + "; ".join(errors))
+        market_payload = market_snapshot.payload
+        theme_payload = theme_snapshot.payload
+
+    market_basis_date = extract_market_basis(market_payload)
+    theme_basis_date = theme_payload.get("basis_date")
+    if not market_basis_date or not theme_basis_date:
+        raise RuntimeError(
+            "上游结果缺少基准日，已停止生成正式影子仓位: "
+            f"market_basis_date={market_basis_date or 'missing'}, "
+            f"theme_basis_date={theme_basis_date or 'missing'}"
+        )
+    if market_basis_date != theme_basis_date:
+        raise RuntimeError(
+            "上游基准日不一致，已停止生成正式影子仓位: "
+            f"market_basis_date={market_basis_date}, theme_basis_date={theme_basis_date}"
+        )
+    return market_payload, theme_payload, theme_basis_date, market_basis_date
 
 
 def _latest_run_before(conn: Any, basis_date: str) -> dict[str, Any] | None:
@@ -145,23 +183,21 @@ def _daily_return_from_previous_allocations(
     return total
 
 
-def run_daily_rebalance(reason: str = "manual") -> dict[str, Any]:
+def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) -> dict[str, Any]:
     init_db()
     market_snapshot, theme_snapshot = fetch_market_and_theme()
 
     with connect() as conn:
         _store_source_snapshot(conn, market_snapshot)
         _store_source_snapshot(conn, theme_snapshot)
+        conn.commit()
 
-        market_payload = market_snapshot.payload if market_snapshot.ok else _latest_ok_payload(conn, "market")
-        theme_payload = theme_snapshot.payload if theme_snapshot.ok else _latest_ok_payload(conn, "theme")
-        if not market_payload or not theme_payload:
-            raise RuntimeError("上游接口不可用，且本地没有可回退的历史快照")
-
-        basis_date = theme_payload.get("basis_date") or extract_market_basis(market_payload)
-        if not basis_date:
-            basis_date = date.today().isoformat()
-        market_basis_date = extract_market_basis(market_payload)
+        market_payload, theme_payload, basis_date, market_basis_date = _run_payloads_from_snapshots(
+            conn,
+            market_snapshot,
+            theme_snapshot,
+            allow_stale=allow_stale,
+        )
 
         previous_run = _latest_run_before(conn, basis_date)
         previous_allocations = _allocations_for_run(

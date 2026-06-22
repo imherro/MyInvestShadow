@@ -254,6 +254,48 @@ def test_thematic_prefers_unheld_strong_market_performance() -> None:
     assert "主题仓位按市场表现优先" in thematic_rows[0]["etf_gate_reasons"]
 
 
+def test_thematic_tolerates_non_numeric_rank() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "35%-45%",
+                    "market_position_score": 46.98,
+                }
+            }
+        }
+    }
+    theme_payload = {
+        "theme_signals": [
+            {
+                "rank": "R1",
+                "theme": "观察强势方向",
+                "stage": "观察线",
+                "score_weight_ratio": 90,
+                "evidence_score": 90,
+                "top_etf": "562500.SH 机器人ETF",
+            }
+        ]
+    }
+    price_map = {
+        "562500.SH": PricePoint(
+            "562500.SH",
+            1.0,
+            1.0,
+            "test",
+            amount=500_000,
+            r5=6.0,
+            r20=12.0,
+            premium_rate=0.1,
+        )
+    }
+
+    plan = allocation_plan(market_payload, theme_payload, price_map)
+    thematic_rows = [row for row in plan["targets"] if row["sleeve"] == "thematic"]
+
+    assert [row["code"] for row in thematic_rows] == ["562500.SH"]
+
+
 def test_unselected_observation_gate_stays_watch_backup() -> None:
     market_payload = {
         "results": {
