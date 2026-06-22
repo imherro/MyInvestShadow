@@ -461,7 +461,7 @@ def test_gate_keeps_observation_direction_as_watch_backup() -> None:
     assert "观察线保留备选" in gate_rows["消费观察"]["reasons"]
 
 
-def test_weak_market_drops_sub_one_percent_thematic_to_defensive() -> None:
+def test_weak_market_keeps_sub_one_percent_thematic_after_pre_gate() -> None:
     market_payload = {
         "results": {
             "market_score": {
@@ -502,11 +502,11 @@ def test_weak_market_drops_sub_one_percent_thematic_to_defensive() -> None:
 
     assert round(summary["core"], 4) == 9.0
     assert round(summary["mainline"], 4) == 5.25
-    assert round(summary["thematic"], 4) == 0.0
-    assert round(plan["risk_budget_ratio"], 4) == 14.25
+    assert round(summary["thematic"], 4) == 0.75
+    assert round(plan["risk_budget_ratio"], 4) == 15.0
 
 
-def test_etf_gate_moves_missing_data_to_defensive() -> None:
+def test_pre_gate_filter_reroutes_missing_data_budget_to_core() -> None:
     market_payload = {
         "results": {
             "market_score": {
@@ -533,17 +533,22 @@ def test_etf_gate_moves_missing_data_to_defensive() -> None:
     summary = sleeve_summary(plan["targets"])
 
     assert round(plan["market_risk_budget_ratio"], 2) == 30.0
-    assert round(plan["risk_budget_ratio"], 2) == 15.0
+    assert round(plan["risk_budget_ratio"], 2) == 30.0
+    assert summary["core"] == 30.0
     assert summary["mainline"] == 0.0
-    assert summary["defensive"] == 85.0
+    assert summary["defensive"] == 70.0
     assert {row["code"] for row in plan["targets"] if row["sleeve"] == "defensive"} == {
         DEFENSIVE_ETF["code"]
     }
     assert plan["etf_gate"][0]["grade"] == "D"
     assert "缺少可验证交易数据" in plan["etf_gate"][0]["reject_reasons"]
+    assert plan["gate_universe_audit"]["pre_gate_universe_size"] == 2
+    assert plan["gate_universe_audit"]["post_gate_universe_size"] == 0
+    assert round(plan["gate_universe_audit"]["mainline_unallocated_to_core_ratio"], 4) == 12.501
+    assert round(plan["gate_universe_audit"]["thematic_unallocated_to_core_ratio"], 4) == 2.499
 
 
-def test_etf_gate_discounts_overheated_candidate() -> None:
+def test_pre_gate_keeps_tradeable_overheated_candidate_without_discount() -> None:
     market_payload = {
         "results": {
             "market_score": {
@@ -582,9 +587,10 @@ def test_etf_gate_discounts_overheated_candidate() -> None:
     rows = {row["code"]: row for row in plan["targets"]}
 
     assert plan["etf_gate"][0]["grade"] == "C"
-    assert plan["etf_gate"][0]["execution_ratio"] == 0.45
-    assert round(rows["588170.SH"]["target_weight_ratio"], 4) == 5.6255
-    assert round(rows[DEFENSIVE_ETF["code"]]["target_weight_ratio"], 4) == 79.3745
+    assert plan["etf_gate"][0]["pre_gate_execution_ratio"] == 0.45
+    assert plan["etf_gate"][0]["execution_ratio"] == 1.0
+    assert round(rows["588170.SH"]["target_weight_ratio"], 4) == 12.501
+    assert round(rows[DEFENSIVE_ETF["code"]]["target_weight_ratio"], 4) == 70.0
 
 
 def test_legacy_core_return_uses_core_etf_basket() -> None:
