@@ -330,6 +330,14 @@ td.theme-cell {
   white-space: normal;
 }
 
+td span {
+  color: var(--muted);
+}
+
+.rebalance-table {
+  max-height: 420px;
+}
+
 tbody tr:last-child td {
   border-bottom: 0;
 }

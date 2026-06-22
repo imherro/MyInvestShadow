@@ -33,6 +33,12 @@ const sleeveShortLabels = {
   thematic: "主题",
   defensive: "防御",
 };
+const actionClass = {
+  new: "positive",
+  increase: "positive",
+  decrease: "negative",
+  exit: "negative",
+};
 
 function showToast(message) {
   const el = byId("toast");
@@ -132,6 +138,45 @@ function renderAllocations(rows) {
   }).join("");
 }
 
+function renderRebalanceHistory(history) {
+  const tbody = byId("rebalanceRows");
+  if (!history || !history.length) {
+    byId("rebalanceCount").textContent = "暂无历史";
+    tbody.innerHTML = `<tr><td colspan="8">暂无有效调仓历史</td></tr>`;
+    return;
+  }
+
+  const rows = history.flatMap((entry) => (entry.changes || []).map((change) => ({
+    ...change,
+    basis_date: entry.basis_date,
+    previous_basis_date: entry.previous_basis_date,
+    active_drift_ratio: entry.active_drift_ratio,
+  })));
+  byId("rebalanceCount").textContent = `${history.length} 次 / ${rows.length} 条变化`;
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="8">最近运行无仓位变化</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map((row) => {
+    const drift = Number(row.drift_ratio || 0);
+    const driftClass = drift >= 0 ? "positive" : "negative";
+    const action = row.action || "";
+    return `
+      <tr>
+        <td>${escapeHtml(row.basis_date || "--")}<br><span>${escapeHtml(row.previous_basis_date || "--")}</span></td>
+        <td class="${actionClass[action] || ""}">${escapeHtml(row.action_label || action || "--")}</td>
+        <td>${escapeHtml(row.code)}</td>
+        <td>${escapeHtml(row.name || row.code)}</td>
+        <td>${sleeveLabels[row.sleeve] || row.sleeve || "--"}</td>
+        <td>${fmtPct(row.previous_weight_ratio, 2)}</td>
+        <td>${fmtPct(row.target_weight_ratio, 2)}</td>
+        <td class="${driftClass}">${fmtPct(drift, 2)}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
 function renderSleeveSummary(summary) {
   const entries = ["core", "mainline", "thematic", "defensive"];
   const compact = window.innerWidth <= 560;
@@ -221,6 +266,7 @@ function render(data) {
   renderSleeveSummary(data.sleeve_summary || {});
   renderEtfGate(data.etf_gate_summary || {}, data.etf_gate || []);
   renderAllocations(data.allocations || []);
+  renderRebalanceHistory(data.rebalance_history || []);
   renderSources(data.source_status || []);
 }
 

@@ -17,6 +17,7 @@ from .service import (
     index_state,
     latest_state,
     nav_curve,
+    rebalance_history,
     run_daily_rebalance,
     source_status,
 )
@@ -139,6 +140,11 @@ def api_run_daily() -> dict[str, Any]:
 @app.get("/api/nav")
 def api_nav() -> list[dict[str, Any]]:
     return nav_curve()
+
+
+@app.get("/api/rebalance-history")
+def api_rebalance_history() -> list[dict[str, Any]]:
+    return rebalance_history()
 
 
 @app.get("/api/source-status")

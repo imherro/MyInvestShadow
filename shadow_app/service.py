@@ -367,6 +367,143 @@ def source_status(conn: Any | None = None) -> list[dict[str, Any]]:
             conn.close()
 
 
+def _latest_runs_by_basis(conn: Any, limit: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT r.*
+        FROM shadow_runs r
+        JOIN (
+            SELECT basis_date, MAX(id) AS max_id
+            FROM shadow_runs
+            GROUP BY basis_date
+        ) latest ON latest.max_id = r.id
+        ORDER BY r.basis_date DESC, r.id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def _change_action(previous_weight: float, target_weight: float) -> str:
+    threshold = 0.005
+    drift = target_weight - previous_weight
+    if abs(drift) < threshold:
+        return "hold"
+    if previous_weight < threshold and target_weight >= threshold:
+        return "new"
+    if target_weight < threshold and previous_weight >= threshold:
+        return "exit"
+    if drift > 0:
+        return "increase"
+    return "decrease"
+
+
+def _change_label(action: str) -> str:
+    return {
+        "new": "调入",
+        "increase": "增加",
+        "decrease": "降低",
+        "exit": "调出",
+        "hold": "不变",
+    }.get(action, action)
+
+
+def _rebalance_changes(
+    current_allocations: list[dict[str, Any]],
+    previous_allocations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    current_by_code = {row["code"]: row for row in current_allocations}
+    previous_by_code = {row["code"]: row for row in previous_allocations}
+    changes: list[dict[str, Any]] = []
+    for code in sorted(set(current_by_code) | set(previous_by_code)):
+        current = current_by_code.get(code)
+        previous = previous_by_code.get(code)
+        target_weight = float((current or {}).get("target_weight_ratio") or 0.0)
+        previous_weight = float((previous or {}).get("target_weight_ratio") or 0.0)
+        action = _change_action(previous_weight, target_weight)
+        if action == "hold":
+            continue
+        source = current or previous or {}
+        changes.append(
+            {
+                "code": code,
+                "name": source.get("name") or code,
+                "sleeve": source.get("sleeve"),
+                "theme": source.get("theme") or "",
+                "stage": source.get("stage") or "",
+                "action": action,
+                "action_label": _change_label(action),
+                "previous_weight_ratio": previous_weight,
+                "target_weight_ratio": target_weight,
+                "drift_ratio": target_weight - previous_weight,
+                "etf_gate_grade": (current or {}).get("etf_gate_grade"),
+                "etf_gate_score": (current or {}).get("etf_gate_score"),
+                "etf_execution_ratio": (current or {}).get("etf_execution_ratio"),
+            }
+        )
+
+    action_order = {"new": 0, "increase": 1, "decrease": 2, "exit": 3}
+    return sorted(
+        changes,
+        key=lambda row: (
+            action_order.get(str(row.get("action")), 9),
+            -abs(float(row.get("drift_ratio") or 0.0)),
+            str(row.get("code") or ""),
+        ),
+    )
+
+
+def rebalance_history(conn: Any | None = None, limit: int = 8) -> list[dict[str, Any]]:
+    should_close = conn is None
+    conn = conn or connect()
+    try:
+        runs = _latest_runs_by_basis(conn, max(2, limit + 1))
+        history: list[dict[str, Any]] = []
+        for index, run in enumerate(runs[:limit]):
+            previous_run = runs[index + 1] if index + 1 < len(runs) else None
+            current_allocations = _allocations_for_run(conn, int(run["id"]))
+            previous_allocations = (
+                _allocations_for_run(conn, int(previous_run["id"])) if previous_run else []
+            )
+            changes = _rebalance_changes(current_allocations, previous_allocations)
+            if not changes and previous_run:
+                continue
+            previous_active = (
+                float(previous_run.get("risk_budget_ratio") or 0.0) if previous_run else 0.0
+            )
+            previous_cash = float(previous_run.get("cash_ratio") or 0.0) if previous_run else 0.0
+            active = float(run.get("risk_budget_ratio") or 0.0)
+            cash = float(run.get("cash_ratio") or 0.0)
+            history.append(
+                {
+                    "run_id": run.get("id"),
+                    "run_at": run.get("run_at"),
+                    "basis_date": run.get("basis_date"),
+                    "reason": run.get("reason"),
+                    "previous_run_id": previous_run.get("id") if previous_run else None,
+                    "previous_basis_date": previous_run.get("basis_date") if previous_run else None,
+                    "active_weight_ratio": active,
+                    "previous_active_weight_ratio": previous_active if previous_run else None,
+                    "active_drift_ratio": active - previous_active if previous_run else None,
+                    "cash_ratio": cash,
+                    "previous_cash_ratio": previous_cash if previous_run else None,
+                    "cash_drift_ratio": cash - previous_cash if previous_run else None,
+                    "nav": run.get("nav"),
+                    "daily_return_ratio": run.get("daily_return_ratio"),
+                    "change_count": len(changes),
+                    "total_abs_drift_ratio": sum(
+                        abs(float(row.get("drift_ratio") or 0.0)) for row in changes
+                    ),
+                    "changes": changes,
+                }
+            )
+        return history
+    finally:
+        if should_close:
+            conn.close()
+
+
 def latest_state() -> dict[str, Any]:
     init_db()
     with connect() as conn:
@@ -378,6 +515,7 @@ def latest_state() -> dict[str, Any]:
             "allocations": allocations,
             "sleeve_summary": sleeve_summary(allocations),
             "nav_curve": nav_curve(conn),
+            "rebalance_history": rebalance_history(conn),
             "source_status": source_status(conn),
         }
 
@@ -435,12 +573,14 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
         "etf_gate": decision_trace.get("etf_gate") or [],
         "nav_curve": state.get("nav_curve") or [],
         "allocations": state.get("allocations") or [],
+        "rebalance_history": state.get("rebalance_history") or [],
         "source_status": state.get("source_status") or [],
         "links": {
             "full_state": "/api/latest",
             "refresh": "/api/run/daily",
             "nav": "/api/nav",
             "allocations": "/api/allocations/latest",
+            "rebalance_history": "/api/rebalance-history",
         },
     }
 
