@@ -4,6 +4,13 @@ from typing import Any
 
 from .pricing import PricePoint
 
+GRADE_WEIGHT_FACTORS = {
+    "A": 1.0,
+    "B": 0.85,
+    "C": 0.60,
+    "D": 0.0,
+}
+
 
 def _safe_float(value: Any) -> float | None:
     try:
@@ -168,6 +175,10 @@ def _grade(score: float, hard_pass: bool) -> tuple[str, float]:
     return "C", 0.45
 
 
+def gate_weight_factor(grade: str | None) -> float:
+    return GRADE_WEIGHT_FACTORS.get(str(grade or "").upper(), 0.0)
+
+
 def evaluate_etf_gate(
     *,
     signal: dict[str, Any],
@@ -234,6 +245,7 @@ def evaluate_etf_gate(
         "score": round(score, 2),
         "grade": grade,
         "hard_pass": hard_pass,
+        "gate_weight_factor": gate_weight_factor(grade),
         "execution_ratio": execution_ratio,
         "reasons": list(dict.fromkeys(reasons)),
         "reject_reasons": list(dict.fromkeys(reject_reasons)),

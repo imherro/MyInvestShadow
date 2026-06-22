@@ -7,7 +7,7 @@ from etf.gate_filter import filter_tradeable_etfs
 from portfolio.position_sizer import compute_target_position
 from portfolio.structure_guard import enforce_structure_constraints
 
-from .etf_gate import evaluate_etf_gate
+from .etf_gate import evaluate_etf_gate, gate_weight_factor
 from .pricing import PricePoint
 
 ETF_CODE_RE = re.compile(r"\b(?P<code>\d{6}\.(?:SH|SZ|BJ))\b\s*(?P<name>[^、,，;；]*)")
@@ -291,12 +291,14 @@ def _pre_allocation_gate_report(report: dict[str, Any]) -> dict[str, Any]:
     tradeable = raw_execution_ratio > 0.0
     report["pre_gate_execution_ratio"] = raw_execution_ratio
     report["pre_gate_tradeable"] = tradeable
+    report["gate_weight_factor"] = gate_weight_factor(report.get("grade")) if tradeable else 0.0
     if tradeable:
         report["execution_ratio"] = 1.0
         report["reasons"] = list(
             dict.fromkeys(
                 [
                     *report.get("reasons", []),
+                    "ETF门禁等级参与仓位权重",
                     "ETF门禁前置通过，仓位不再折扣",
                 ]
             )
@@ -530,7 +532,11 @@ def _distribute_budget(
                 "signal": signal,
                 "representative": representative,
                 "gate_report": report,
-                "weight": _signal_weight(signal) * stage_multiplier(signal.get("stage")),
+                "weight": (
+                    _signal_weight(signal)
+                    * stage_multiplier(signal.get("stage"))
+                    * float(report.get("gate_weight_factor") or 0.0)
+                ),
             }
         )
 
@@ -572,7 +578,10 @@ def _distribute_budget(
                 "etf_gate_reasons": selected["reasons"],
                 "etf_gate_reject_reasons": selected["reject_reasons"],
                 "etf_gate_data_gaps": selected["data_gaps"],
-                "etf_gate_components": selected["components"],
+                "etf_gate_components": {
+                    **(selected.get("components") or {}),
+                    "gate_weight_factor": selected.get("gate_weight_factor"),
+                },
             }
         )
     return rows, 0.0, gate_reports
@@ -621,7 +630,12 @@ def _distribute_thematic_budget(
                 + float(report.get("score") or 0.0) * 0.30
                 + fit_score * 0.15
             )
+            priority_before_gate_factor = priority_score
+            priority_score *= float(report.get("gate_weight_factor") or 0.0)
             report["market_performance_score"] = round(performance_score, 2)
+            report["thematic_priority_before_gate_factor"] = round(
+                priority_before_gate_factor, 2
+            )
             report["thematic_priority_score"] = round(priority_score, 2)
             report["candidate_budget_ratio"] = 0.0
             report["executed_weight_ratio"] = 0.0
@@ -715,7 +729,11 @@ def _distribute_thematic_budget(
                 "etf_gate_data_gaps": report["data_gaps"],
                 "etf_gate_components": {
                     **(report.get("components") or {}),
+                    "gate_weight_factor": report.get("gate_weight_factor"),
                     "market_performance": report.get("market_performance_score"),
+                    "thematic_priority_before_gate_factor": report.get(
+                        "thematic_priority_before_gate_factor"
+                    ),
                     "thematic_priority": report.get("thematic_priority_score"),
                 },
             }

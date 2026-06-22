@@ -183,6 +183,68 @@ def test_target_allocations_use_four_sleeves() -> None:
     assert rows[3]["etf_execution_ratio"] == 1.0
 
 
+def test_mainline_gate_grade_factor_participates_in_weight() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "35%-45%",
+                    "market_position_score": 46.98,
+                }
+            }
+        }
+    }
+    theme_payload = {
+        "theme_signals": [
+            {
+                "theme": "硬科技电子/半导体",
+                "stage": "次主线/强修复",
+                "score_weight_ratio": 83,
+                "evidence_score": 83,
+                "top_etf": "588170.SH 半导体ETF",
+            },
+            {
+                "theme": "新能源/电力设备",
+                "stage": "次主线/强修复",
+                "score_weight_ratio": 73,
+                "evidence_score": 73,
+                "top_etf": "159326.SZ 电网设备ETF",
+            },
+        ]
+    }
+    price_map = {
+        "588170.SH": PricePoint(
+            code="588170.SH",
+            close=1.0,
+            pct_chg=2.0,
+            source="test",
+            amount=1_000_000,
+            amount_rank=1.0,
+        ),
+        "159326.SZ": PricePoint(
+            code="159326.SZ",
+            close=1.0,
+            pct_chg=2.0,
+            source="test",
+            amount=1_000_000,
+            amount_rank=1.0,
+            premium_rate=0.1,
+        ),
+    }
+
+    plan = allocation_plan(market_payload, theme_payload, price_map)
+    rows = {row["code"]: row for row in plan["targets"]}
+
+    assert rows["588170.SH"]["etf_gate_grade"] == "B"
+    assert rows["159326.SZ"]["etf_gate_grade"] == "A"
+    assert rows["588170.SH"]["etf_gate_components"]["gate_weight_factor"] == 0.85
+    assert rows["159326.SZ"]["etf_gate_components"]["gate_weight_factor"] == 1.0
+    assert (
+        rows["159326.SZ"]["target_weight_ratio"]
+        > rows["588170.SH"]["target_weight_ratio"]
+    )
+
+
 def test_thematic_prefers_unheld_strong_market_performance() -> None:
     market_payload = {
         "results": {

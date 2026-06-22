@@ -53,13 +53,22 @@ const instrumentCode = (row) => row.display_code || row.code || "--";
 const instrumentBadge = (row) => row.is_synthetic
   ? `<span class="synthetic-badge">内部</span>`
   : "";
+const gateFactor = (row) => {
+  const components = row.etf_gate_components || row.components || {};
+  const factor = row.gate_weight_factor ?? components.gate_weight_factor;
+  const number = Number(factor);
+  return Number.isFinite(number) ? number : null;
+};
 
 function allocationGate(row) {
   if (row.etf_gate_grade) {
+    const factor = gateFactor(row);
     return {
-      text: `${row.etf_gate_grade} / ${fmtPct(Number(row.etf_execution_ratio || 0) * 100, 0)}`,
+      text: factor === null
+        ? `${row.etf_gate_grade} / ${fmtPct(Number(row.etf_execution_ratio || 0) * 100, 0)}`
+        : `${row.etf_gate_grade} / x${factor.toFixed(2)}`,
       className: `gate-label grade-${String(row.etf_gate_grade).toLowerCase()}`,
-      title: "主线/主题ETF门禁结果",
+      title: "主线/主题ETF门禁结果，x 为参与仓位分配的等级系数",
     };
   }
   if (row.sleeve === "core") {
@@ -269,7 +278,7 @@ function renderEtfGate(summary, rows) {
 
   const tbody = byId("gateRows");
   if (!rows || !rows.length) {
-    tbody.innerHTML = `<tr><td colspan="7">暂无门禁记录</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8">暂无门禁记录</td></tr>`;
     return;
   }
   const ordered = [...rows].sort((a, b) => (
@@ -282,6 +291,7 @@ function renderEtfGate(summary, rows) {
       .slice(0, 3)
       .join("；");
     const selectedMark = row.selected ? "已入选" : "备选";
+    const factor = gateFactor(row);
     return `
       <tr class="${row.selected ? "selected-row" : ""}">
         <td>${escapeHtml(instrumentCode(row))}${instrumentBadge(row)}</td>
@@ -289,6 +299,7 @@ function renderEtfGate(summary, rows) {
         <td>${sleeveLabels[row.sleeve] || row.sleeve || "--"}</td>
         <td><span class="grade-pill grade-${String(row.grade || "").toLowerCase()}">${escapeHtml(row.grade || "--")}</span></td>
         <td>${Number(row.score || 0).toFixed(1)}</td>
+        <td>${factor === null ? "--" : `x${factor.toFixed(2)}`}</td>
         <td>${fmtPct(Number(row.execution_ratio || 0) * 100, 0)} ${selectedMark}</td>
         <td class="reason-cell">${escapeHtml(reasonText || "--")}</td>
       </tr>
