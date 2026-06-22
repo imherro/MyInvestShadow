@@ -27,7 +27,12 @@ HTTP_HEADERS = {
 class RuntimeConfig:
     host: str = os.getenv("SHADOW_HOST", "127.0.0.1")
     port: int = int(os.getenv("SHADOW_PORT", "8013"))
-    refresh_minutes: int = int(os.getenv("SHADOW_REFRESH_MINUTES", "30"))
+    refresh_minutes: int = int(os.getenv("SHADOW_REFRESH_MINUTES", "5"))
+    schedule_times: tuple[str, ...] = tuple(
+        item.strip()
+        for item in os.getenv("SHADOW_SCHEDULE_TIMES", "21:10,21:40,22:10").split(",")
+        if item.strip()
+    )
     db_path: Path = DB_PATH
 
 

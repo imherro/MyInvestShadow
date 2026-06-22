@@ -27,7 +27,39 @@ app.mount("/static", StaticFiles(directory=ROOT_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT_DIR / "templates")
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
-_last_scheduled_day: str | None = None
+_successful_scheduled_day: str | None = None
+_attempted_schedule_slots: set[str] = set()
+
+
+def _schedule_slot_key(
+    now: datetime,
+    successful_day: str | None,
+    attempted_slots: set[str],
+    schedule_times: tuple[str, ...],
+) -> str | None:
+    day = now.date().isoformat()
+    if successful_day == day:
+        return None
+
+    due_slot: str | None = None
+    for item in schedule_times:
+        try:
+            hour_text, minute_text = item.split(":", 1)
+            hour = int(hour_text)
+            minute = int(minute_text)
+        except ValueError:
+            continue
+        slot_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if now >= slot_time:
+            due_slot = f"{hour:02d}:{minute:02d}"
+
+    if due_slot is None:
+        return None
+
+    key = f"{day}:{due_slot}"
+    if key in attempted_slots:
+        return None
+    return key
 
 
 async def _startup_seed() -> None:
@@ -39,20 +71,30 @@ async def _startup_seed() -> None:
 
 
 async def _scheduled_refresh_loop() -> None:
-    global _last_scheduled_day
+    global _successful_scheduled_day
     await asyncio.sleep(3)
     await _startup_seed()
     while True:
-        await asyncio.sleep(max(5, config.refresh_minutes) * 60)
+        await asyncio.sleep(max(1, config.refresh_minutes) * 60)
         now = datetime.now(SHANGHAI)
-        after_close = now.hour > 15 or (now.hour == 15 and now.minute >= 5)
-        if not after_close:
+        day = now.date().isoformat()
+        for key in list(_attempted_schedule_slots):
+            if not key.startswith(f"{day}:"):
+                _attempted_schedule_slots.discard(key)
+
+        slot_key = _schedule_slot_key(
+            now,
+            _successful_scheduled_day,
+            _attempted_schedule_slots,
+            config.schedule_times,
+        )
+        if not slot_key:
             continue
-        if _last_scheduled_day == now.date().isoformat():
-            continue
+        _attempted_schedule_slots.add(slot_key)
+        slot = slot_key.split(":", 1)[1]
         try:
-            await asyncio.to_thread(run_daily_rebalance, "scheduled_close_refresh")
-            _last_scheduled_day = now.date().isoformat()
+            await asyncio.to_thread(run_daily_rebalance, f"scheduled_evening_refresh_{slot}")
+            _successful_scheduled_day = day
         except Exception:
             continue
 
