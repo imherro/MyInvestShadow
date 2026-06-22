@@ -170,6 +170,10 @@ def test_target_allocations_use_four_sleeves() -> None:
         "515050.SH",
         "DEFENSIVE.CASH",
     ]
+    assert rows[0]["display_code"] == "内部组合"
+    assert rows[0]["is_synthetic"] is True
+    assert rows[-1]["display_code"] == "现金仓"
+    assert rows[-1]["is_synthetic"] is True
     assert rows[1]["etf_gate_grade"] == "A"
     assert rows[1]["etf_execution_ratio"] == 1.0
 

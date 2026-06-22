@@ -4,6 +4,7 @@ from datetime import date
 from typing import Any
 
 from .allocator import (
+    SYNTHETIC_INSTRUMENTS,
     allocation_candidate_codes,
     allocation_plan,
     allocation_weight_map,
@@ -106,6 +107,10 @@ def _allocations_for_run(conn: Any, run_id: int | None) -> list[dict[str, Any]]:
     ).fetchall()
     result = rows_to_dicts(rows)
     for row in result:
+        synthetic = SYNTHETIC_INSTRUMENTS.get(row.get("code"))
+        row["display_code"] = synthetic["display_code"] if synthetic else row.get("code")
+        row["instrument_type"] = synthetic["instrument_type"] if synthetic else "etf"
+        row["is_synthetic"] = bool(synthetic)
         row["etf_gate_pass"] = (
             bool(row["etf_gate_pass"]) if row.get("etf_gate_pass") is not None else None
         )
@@ -428,6 +433,9 @@ def _rebalance_changes(
         changes.append(
             {
                 "code": code,
+                "display_code": source.get("display_code") or code,
+                "instrument_type": source.get("instrument_type") or "etf",
+                "is_synthetic": bool(source.get("is_synthetic")),
                 "name": source.get("name") or code,
                 "sleeve": source.get("sleeve"),
                 "theme": source.get("theme") or "",

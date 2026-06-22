@@ -285,6 +285,22 @@ main {
   background: #f5fbf9;
 }
 
+.synthetic-row {
+  background: #fbfcfd;
+}
+
+.synthetic-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #eef2f7;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .reason-cell {
   max-width: 360px;
   white-space: normal;

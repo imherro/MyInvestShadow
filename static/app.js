@@ -40,6 +40,11 @@ const actionClass = {
   exit: "negative",
 };
 
+const instrumentCode = (row) => row.display_code || row.code || "--";
+const instrumentBadge = (row) => row.is_synthetic
+  ? `<span class="synthetic-badge">内部</span>`
+  : "";
+
 function showToast(message) {
   const el = byId("toast");
   el.textContent = message;
@@ -124,8 +129,8 @@ function renderAllocations(rows) {
       ? `${row.etf_gate_grade} / ${fmtPct(Number(row.etf_execution_ratio || 0) * 100, 0)}`
       : "--";
     return `
-      <tr>
-        <td>${escapeHtml(row.code)}</td>
+      <tr class="${row.is_synthetic ? "synthetic-row" : ""}">
+        <td>${escapeHtml(instrumentCode(row))}${instrumentBadge(row)}</td>
         <td>${escapeHtml(row.name || row.code)}</td>
         <td>${sleeveLabels[row.sleeve] || row.sleeve || "--"}</td>
         <td class="theme-cell">${escapeHtml(row.theme || "")}<br><span>${escapeHtml(row.stage || "")}</span></td>
@@ -166,7 +171,7 @@ function renderRebalanceHistory(history) {
       <tr>
         <td>${escapeHtml(row.basis_date || "--")}<br><span>${escapeHtml(row.previous_basis_date || "--")}</span></td>
         <td class="${actionClass[action] || ""}">${escapeHtml(row.action_label || action || "--")}</td>
-        <td>${escapeHtml(row.code)}</td>
+        <td>${escapeHtml(instrumentCode(row))}${instrumentBadge(row)}</td>
         <td>${escapeHtml(row.name || row.code)}</td>
         <td>${sleeveLabels[row.sleeve] || row.sleeve || "--"}</td>
         <td>${fmtPct(row.previous_weight_ratio, 2)}</td>
@@ -237,7 +242,7 @@ function renderEtfGate(summary, rows) {
     const selectedMark = row.selected ? "已入选" : "";
     return `
       <tr class="${row.selected ? "selected-row" : ""}">
-        <td>${escapeHtml(row.code)}</td>
+        <td>${escapeHtml(instrumentCode(row))}${instrumentBadge(row)}</td>
         <td>${escapeHtml(row.name || row.code)}</td>
         <td>${sleeveLabels[row.sleeve] || row.sleeve || "--"}</td>
         <td><span class="grade-pill grade-${String(row.grade || "").toLowerCase()}">${escapeHtml(row.grade || "--")}</span></td>

@@ -7,6 +7,18 @@ from .etf_gate import evaluate_etf_gate
 from .pricing import PricePoint
 
 ETF_CODE_RE = re.compile(r"\b(?P<code>\d{6}\.(?:SH|SZ|BJ))\b\s*(?P<name>[^、,，;；]*)")
+SYNTHETIC_INSTRUMENTS = {
+    "CORE.ASHARE": {
+        "display_code": "内部组合",
+        "instrument_type": "synthetic_core",
+        "is_synthetic": True,
+    },
+    "DEFENSIVE.CASH": {
+        "display_code": "现金仓",
+        "instrument_type": "synthetic_cash",
+        "is_synthetic": True,
+    },
+}
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -225,8 +237,12 @@ def _priced_row(
     point: PricePoint | None,
     source_note: str,
 ) -> dict[str, Any]:
+    synthetic = SYNTHETIC_INSTRUMENTS.get(code)
     return {
         "code": code,
+        "display_code": synthetic["display_code"] if synthetic else code,
+        "instrument_type": synthetic["instrument_type"] if synthetic else "etf",
+        "is_synthetic": bool(synthetic),
         "name": name,
         "sleeve": sleeve,
         "theme": theme,

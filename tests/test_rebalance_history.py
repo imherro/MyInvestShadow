@@ -131,3 +131,5 @@ def test_rebalance_history_includes_exited_positions(tmp_path) -> None:
     assert changes["159516.SZ"]["target_weight_ratio"] == 0.0
     assert changes["588200.SH"]["action"] == "new"
     assert changes["CORE.ASHARE"]["action"] == "increase"
+    assert changes["CORE.ASHARE"]["display_code"] == "内部组合"
+    assert changes["CORE.ASHARE"]["is_synthetic"] is True
