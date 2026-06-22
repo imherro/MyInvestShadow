@@ -26,11 +26,11 @@ def test_build_index_payload_is_homepage_focused() -> None:
             "defensive": 64.0,
         },
         "nav_curve": [{"basis_date": "2026-06-17", "nav": 1.0123}],
-        "allocations": [{"code": "CORE.ASHARE", "target_weight_ratio": 18.0}],
+        "allocations": [{"code": "510300.SH", "target_weight_ratio": 8.1}],
         "rebalance_history": [
             {
                 "basis_date": "2026-06-17",
-                "changes": [{"code": "CORE.ASHARE", "action": "new"}],
+                "changes": [{"code": "510300.SH", "action": "new"}],
             }
         ],
         "run_payload": {
@@ -51,7 +51,7 @@ def test_build_index_payload_is_homepage_focused() -> None:
         "label": "核心仓位",
         "weight_ratio": 18.0,
     }
-    assert payload["allocations"][0]["code"] == "CORE.ASHARE"
+    assert payload["allocations"][0]["code"] == "510300.SH"
     assert payload["etf_gate_summary"]["reviewed_count"] == 1
     assert payload["etf_gate"][0]["grade"] == "A"
     assert payload["rebalance_history"][0]["basis_date"] == "2026-06-17"

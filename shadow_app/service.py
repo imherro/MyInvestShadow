@@ -8,6 +8,7 @@ from .allocator import (
     allocation_candidate_codes,
     allocation_plan,
     allocation_weight_map,
+    legacy_core_price_point_from_etfs,
     market_record,
     sleeve_summary,
 )
@@ -176,6 +177,10 @@ def run_daily_rebalance(reason: str = "manual") -> dict[str, Any]:
         fallback_prices = theme_price_fallback(theme_payload)
         tushare_prices = fetch_tushare_prices(codes, basis_date) if codes else {}
         price_map = merge_price_maps(tushare_prices, fallback_prices)
+        if "CORE.ASHARE" in codes:
+            legacy_core_point = legacy_core_price_point_from_etfs(price_map)
+            if legacy_core_point and legacy_core_point.pct_chg is not None:
+                price_map["CORE.ASHARE"] = legacy_core_point
 
         plan = allocation_plan(market_payload, theme_payload, price_map)
         risk_budget = float(plan["risk_budget_ratio"])

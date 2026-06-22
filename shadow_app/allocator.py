@@ -19,6 +19,37 @@ SYNTHETIC_INSTRUMENTS = {
         "is_synthetic": True,
     },
 }
+CORE_ETF_BASKET = (
+    {
+        "code": "510300.SH",
+        "name": "华泰柏瑞沪深300ETF",
+        "theme": "核心-沪深300",
+        "weight": 0.45,
+    },
+    {
+        "code": "510500.SH",
+        "name": "南方中证500ETF",
+        "theme": "核心-中证500",
+        "weight": 0.25,
+    },
+    {
+        "code": "510210.SH",
+        "name": "富国上证综指ETF",
+        "theme": "核心-上证综指",
+        "weight": 0.15,
+    },
+    {
+        "code": "159915.SZ",
+        "name": "易方达创业板ETF",
+        "theme": "核心-创业板",
+        "weight": 0.15,
+    },
+)
+DEFENSIVE_ETF = {
+    "code": "511880.SH",
+    "name": "银华货币ETF-A",
+    "theme": "防御仓位",
+}
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -184,44 +215,28 @@ def _first_candidate(signal: dict[str, Any]) -> dict[str, str] | None:
     return candidates[0] if candidates else None
 
 
-def _core_price_point(
-    market_payload: dict[str, Any], theme_payload: dict[str, Any]
-) -> PricePoint:
-    broad_indexes = (
-        (theme_payload.get("market_context") or {}).get("broad_indexes")
-        or ((theme_payload.get("latest_result") or {}).get("broad_indexes"))
-        or []
-    )
-    weights = {
-        "000300.SH": 0.45,
-        "000905.SH": 0.25,
-        "000001.SH": 0.15,
-        "399006.SZ": 0.15,
-    }
+def legacy_core_price_point_from_etfs(
+    price_map: dict[str, PricePoint],
+) -> PricePoint | None:
     weighted = 0.0
     used_weight = 0.0
-    fallback_values: list[float] = []
-    for row in broad_indexes:
-        try:
-            r1 = float(row.get("r1"))
-        except (TypeError, ValueError):
+    sources: list[str] = []
+    for item in CORE_ETF_BASKET:
+        code = str(item["code"])
+        point = price_map.get(code)
+        if not point or point.pct_chg is None:
             continue
-        fallback_values.append(r1)
-        code = row.get("code")
-        if code in weights:
-            weighted += r1 * weights[code]
-            used_weight += weights[code]
-    if used_weight > 0:
-        pct_chg = weighted / used_weight
-    elif fallback_values:
-        pct_chg = sum(fallback_values) / len(fallback_values)
-    else:
-        pct_chg = None
+        weighted += float(point.pct_chg) * float(item["weight"])
+        used_weight += float(item["weight"])
+        if point.source and point.source not in sources:
+            sources.append(point.source)
+    if used_weight <= 0:
+        return None
     return PricePoint(
         code="CORE.ASHARE",
         close=None,
-        pct_chg=pct_chg,
-        source="theme.market_context.broad_indexes",
+        pct_chg=weighted / used_weight,
+        source="legacy_core_from_etf_basket" + (":" + "+".join(sources) if sources else ""),
     )
 
 
@@ -253,6 +268,31 @@ def _priced_row(
         "pct_chg": point.pct_chg if point else None,
         "source_note": point.source if point else source_note,
     }
+
+
+def _core_etf_rows(
+    core_weight: float, price_map: dict[str, PricePoint], market_payload: dict[str, Any]
+) -> list[dict[str, Any]]:
+    if core_weight < 1.0:
+        return []
+    stage = market_record(market_payload).get("market_regime") or "核心底仓"
+    rows: list[dict[str, Any]] = []
+    for item in CORE_ETF_BASKET:
+        code = str(item["code"])
+        rows.append(
+            _priced_row(
+                code=code,
+                name=str(item["name"]),
+                sleeve="core",
+                theme=str(item["theme"]),
+                stage=stage,
+                target_weight_ratio=core_weight * float(item["weight"]),
+                evidence_score=None,
+                point=price_map.get(code),
+                source_note="core.etf_basket",
+            )
+        )
+    return rows
 
 
 def _mainline_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -393,7 +433,8 @@ def allocation_candidate_codes(
     theme_payload: dict[str, Any],
 ) -> list[str]:
     signals = theme_payload.get("theme_signals") or []
-    codes = {"CORE.ASHARE", "DEFENSIVE.CASH"}
+    codes = {str(item["code"]) for item in CORE_ETF_BASKET}
+    codes.add(str(DEFENSIVE_ETF["code"]))
     for signal in [*_mainline_signals(signals), *_thematic_signals(signals)]:
         for candidate in _signal_candidates(signal):
             codes.add(candidate["code"])
@@ -410,23 +451,7 @@ def allocation_plan(
     signals = theme_payload.get("theme_signals") or []
 
     rows: list[dict[str, Any]] = []
-    core_point = price_map.get("CORE.ASHARE")
-    if core_point is None or core_point.pct_chg is None:
-        core_point = _core_price_point(market_payload, theme_payload)
-    if sleeves["core"] >= 1.0:
-        rows.append(
-            _priced_row(
-                code="CORE.ASHARE",
-                name="A股核心宽基组合",
-                sleeve="core",
-                theme="核心仓位",
-                stage=market_record(market_payload).get("market_regime") or "核心底仓",
-                target_weight_ratio=sleeves["core"],
-                evidence_score=None,
-                point=core_point,
-                source_note="market broad indexes",
-            )
-        )
+    rows.extend(_core_etf_rows(sleeves["core"], price_map, market_payload))
 
     mainline_rows, _mainline_unused, mainline_gate = _distribute_budget(
         _mainline_signals(signals), sleeves["mainline"], price_map, "mainline"
@@ -441,20 +466,15 @@ def allocation_plan(
     defensive_weight = max(0.0, 100.0 - used_non_defensive)
     rows.append(
         _priced_row(
-            code="DEFENSIVE.CASH",
-            name="防御现金仓",
+            code=str(DEFENSIVE_ETF["code"]),
+            name=str(DEFENSIVE_ETF["name"]),
             sleeve="defensive",
-            theme="防御仓位",
-            stage="现金/等待",
+            theme=str(DEFENSIVE_ETF["theme"]),
+            stage="货币ETF/等待",
             target_weight_ratio=defensive_weight,
             evidence_score=None,
-            point=PricePoint(
-                code="DEFENSIVE.CASH",
-                close=1.0,
-                pct_chg=0.0,
-                source="defensive.cash",
-            ),
-            source_note="defensive.cash",
+            point=price_map.get(str(DEFENSIVE_ETF["code"])),
+            source_note="defensive.money_market_etf",
         )
     )
 

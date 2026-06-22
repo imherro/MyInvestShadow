@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from shadow_app.allocator import (
+    DEFENSIVE_ETF,
     allocation_plan,
     extract_etf_candidates,
+    legacy_core_price_point_from_etfs,
     risk_budget_from_market,
     sleeve_summary,
     target_allocations,
@@ -165,17 +167,21 @@ def test_target_allocations_use_four_sleeves() -> None:
         "defensive": 64.0,
     }
     assert [row["code"] for row in rows] == [
-        "CORE.ASHARE",
+        "510300.SH",
+        "510500.SH",
+        "510210.SH",
+        "159915.SZ",
         "588170.SH",
         "515050.SH",
-        "DEFENSIVE.CASH",
+        DEFENSIVE_ETF["code"],
     ]
-    assert rows[0]["display_code"] == "内部组合"
-    assert rows[0]["is_synthetic"] is True
-    assert rows[-1]["display_code"] == "现金仓"
-    assert rows[-1]["is_synthetic"] is True
-    assert rows[1]["etf_gate_grade"] == "A"
-    assert rows[1]["etf_execution_ratio"] == 1.0
+    assert rows[0]["name"] == "华泰柏瑞沪深300ETF"
+    assert rows[0]["target_weight_ratio"] == 8.1
+    assert rows[-1]["name"] == "银华货币ETF-A"
+    assert all(row["instrument_type"] == "etf" for row in rows)
+    assert all(row["is_synthetic"] is False for row in rows)
+    assert rows[4]["etf_gate_grade"] == "A"
+    assert rows[4]["etf_execution_ratio"] == 1.0
 
 
 def test_etf_gate_moves_missing_data_to_defensive() -> None:
@@ -208,6 +214,9 @@ def test_etf_gate_moves_missing_data_to_defensive() -> None:
     assert round(plan["risk_budget_ratio"], 2) == 18.0
     assert summary["mainline"] == 0.0
     assert summary["defensive"] == 82.0
+    assert {row["code"] for row in plan["targets"] if row["sleeve"] == "defensive"} == {
+        DEFENSIVE_ETF["code"]
+    }
     assert plan["etf_gate"][0]["grade"] == "D"
     assert "缺少可验证交易数据" in plan["etf_gate"][0]["reject_reasons"]
 
@@ -253,4 +262,19 @@ def test_etf_gate_discounts_overheated_candidate() -> None:
     assert plan["etf_gate"][0]["grade"] == "C"
     assert plan["etf_gate"][0]["execution_ratio"] == 0.45
     assert round(rows["588170.SH"]["target_weight_ratio"], 4) == 6.7505
-    assert round(rows["DEFENSIVE.CASH"]["target_weight_ratio"], 4) == 75.2495
+    assert round(rows[DEFENSIVE_ETF["code"]]["target_weight_ratio"], 4) == 75.2495
+
+
+def test_legacy_core_return_uses_core_etf_basket() -> None:
+    point = legacy_core_price_point_from_etfs(
+        {
+            "510300.SH": PricePoint("510300.SH", 1.0, 1.0, "test"),
+            "510500.SH": PricePoint("510500.SH", 1.0, 2.0, "test"),
+            "510210.SH": PricePoint("510210.SH", 1.0, -1.0, "test"),
+            "159915.SZ": PricePoint("159915.SZ", 1.0, 3.0, "test"),
+        }
+    )
+
+    assert point is not None
+    assert point.code == "CORE.ASHARE"
+    assert round(point.pct_chg or 0.0, 4) == 1.25
