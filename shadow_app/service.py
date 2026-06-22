@@ -258,12 +258,14 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
             "market_risk_budget_ratio": plan["market_risk_budget_ratio"],
             "position_sizing": plan["position_sizing"],
             "gate_universe_audit": plan["gate_universe_audit"],
+            "structure_guard_report": plan["structure_guard_report"],
             "sleeve_targets_before_gate": plan["sleeve_targets_before_gate"],
             "executed_active_weight_ratio": risk_budget,
             "decision_trace": {
                 "market_risk_budget_ratio": plan["market_risk_budget_ratio"],
                 "position_sizing": plan["position_sizing"],
                 "gate_universe_audit": plan["gate_universe_audit"],
+                "structure_guard_report": plan["structure_guard_report"],
                 "sleeve_targets_before_gate": plan["sleeve_targets_before_gate"],
                 "etf_gate_summary": plan["etf_gate_summary"],
                 "etf_gate": plan["etf_gate"],
@@ -586,6 +588,7 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
     )
     etf_gate = state.get("etf_gate") or decision_trace.get("etf_gate") or []
     gate_universe_audit = decision_trace.get("gate_universe_audit") or {}
+    structure_guard_report = decision_trace.get("structure_guard_report") or {}
     sleeve_weights = state.get("sleeve_summary") or {}
     metrics = {
         "nav": run.get("nav"),
@@ -632,6 +635,7 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
         ],
         "sleeve_summary": sleeve_weights,
         "gate_universe_audit": gate_universe_audit,
+        "structure_guard_report": structure_guard_report,
         "etf_gate_summary": etf_gate_summary,
         "etf_gate": etf_gate,
         "nav_curve": state.get("nav_curve") or [],

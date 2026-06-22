@@ -506,7 +506,7 @@ def test_weak_market_keeps_sub_one_percent_thematic_after_pre_gate() -> None:
     assert round(plan["risk_budget_ratio"], 4) == 15.0
 
 
-def test_pre_gate_filter_reroutes_missing_data_budget_to_core() -> None:
+def test_structure_guard_safe_mode_keeps_missing_data_budget_defensive() -> None:
     market_payload = {
         "results": {
             "market_score": {
@@ -533,10 +533,10 @@ def test_pre_gate_filter_reroutes_missing_data_budget_to_core() -> None:
     summary = sleeve_summary(plan["targets"])
 
     assert round(plan["market_risk_budget_ratio"], 2) == 30.0
-    assert round(plan["risk_budget_ratio"], 2) == 30.0
-    assert summary["core"] == 30.0
+    assert round(plan["risk_budget_ratio"], 2) == 15.0
+    assert summary["core"] == 15.0
     assert summary["mainline"] == 0.0
-    assert summary["defensive"] == 70.0
+    assert summary["defensive"] == 85.0
     assert {row["code"] for row in plan["targets"] if row["sleeve"] == "defensive"} == {
         DEFENSIVE_ETF["code"]
     }
@@ -544,8 +544,11 @@ def test_pre_gate_filter_reroutes_missing_data_budget_to_core() -> None:
     assert "缺少可验证交易数据" in plan["etf_gate"][0]["reject_reasons"]
     assert plan["gate_universe_audit"]["pre_gate_universe_size"] == 2
     assert plan["gate_universe_audit"]["post_gate_universe_size"] == 0
-    assert round(plan["gate_universe_audit"]["mainline_unallocated_to_core_ratio"], 4) == 12.501
-    assert round(plan["gate_universe_audit"]["thematic_unallocated_to_core_ratio"], 4) == 2.499
+    assert round(plan["gate_universe_audit"]["mainline_unallocated_ratio"], 4) == 12.501
+    assert round(plan["gate_universe_audit"]["thematic_unallocated_ratio"], 4) == 2.499
+    assert plan["structure_guard_report"]["safe_mode_triggered"] is True
+    assert plan["structure_guard_report"]["active_sum_check"] is True
+    assert plan["structure_guard_report"]["total_sum_check"] is True
 
 
 def test_pre_gate_keeps_tradeable_overheated_candidate_without_discount() -> None:
@@ -589,8 +592,11 @@ def test_pre_gate_keeps_tradeable_overheated_candidate_without_discount() -> Non
     assert plan["etf_gate"][0]["grade"] == "C"
     assert plan["etf_gate"][0]["pre_gate_execution_ratio"] == 0.45
     assert plan["etf_gate"][0]["execution_ratio"] == 1.0
-    assert round(rows["588170.SH"]["target_weight_ratio"], 4) == 12.501
+    assert round(rows["588170.SH"]["target_weight_ratio"], 4) == 15.0
     assert round(rows[DEFENSIVE_ETF["code"]]["target_weight_ratio"], 4) == 70.0
+    assert round(plan["gate_universe_audit"]["thematic_unallocated_ratio"], 4) == 2.499
+    assert plan["structure_guard_report"]["safe_mode_triggered"] is False
+    assert plan["structure_guard_report"]["redistributed_ratio"]["mainline"] == 2.499
 
 
 def test_legacy_core_return_uses_core_etf_basket() -> None:

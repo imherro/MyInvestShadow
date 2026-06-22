@@ -5,6 +5,7 @@ from typing import Any
 
 from etf.gate_filter import filter_tradeable_etfs
 from portfolio.position_sizer import compute_target_position
+from portfolio.structure_guard import enforce_structure_constraints
 
 from .etf_gate import evaluate_etf_gate
 from .pricing import PricePoint
@@ -835,6 +836,22 @@ def _gate_summary(gate_reports: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _scale_sleeve_rows(rows: list[dict[str, Any]], sleeve: str, target_weight: float) -> None:
+    sleeve_rows = [row for row in rows if row.get("sleeve") == sleeve]
+    current_weight = sum(float(row.get("target_weight_ratio") or 0.0) for row in sleeve_rows)
+    if not sleeve_rows or current_weight <= 0.0:
+        return
+    scale = target_weight / current_weight
+    for row in sleeve_rows:
+        row["target_weight_ratio"] = float(row.get("target_weight_ratio") or 0.0) * scale
+        if row.get("pre_gate_weight_ratio") is not None:
+            row["pre_gate_weight_ratio"] = float(row.get("pre_gate_weight_ratio") or 0.0) * scale
+        if row.get("drift_ratio") is not None:
+            row["drift_ratio"] = float(row.get("target_weight_ratio") or 0.0) - float(
+                row.get("previous_weight_ratio") or 0.0
+            )
+
+
 def allocation_candidate_codes(
     market_payload: dict[str, Any],
     theme_payload: dict[str, Any],
@@ -871,13 +888,31 @@ def allocation_plan(
         {*core_codes, *(row["code"] for row in mainline_rows)},
         {str(row.get("theme") or "") for row in mainline_rows if row.get("theme")},
     )
-    core_budget = sleeves["core"] + mainline_unused + thematic_unused
-    rows.extend(_core_etf_rows(core_budget, price_map, market_payload))
+    actual_gate_reports = [*mainline_gate, *thematic_gate]
+    valid_universe_size = sum(1 for row in actual_gate_reports if row.get("pre_gate_tradeable"))
+    target_active_weight = sum(float(sleeves[key]) for key in ("core", "mainline", "thematic"))
+    structure_guard = enforce_structure_constraints(
+        {
+            "core": sleeves["core"],
+            "mainline": sum(float(row["target_weight_ratio"]) for row in mainline_rows),
+            "thematic": sum(float(row["target_weight_ratio"]) for row in thematic_rows),
+            "unallocated": {
+                "mainline": mainline_unused,
+                "thematic": thematic_unused,
+            },
+            "valid_universe_size": valid_universe_size,
+        },
+        target_active_weight,
+    )
+    guarded_sleeves = structure_guard["allocation"]
+    rows.extend(_core_etf_rows(guarded_sleeves["core"], price_map, market_payload))
     rows.extend(mainline_rows)
     rows.extend(thematic_rows)
+    _scale_sleeve_rows(rows, "mainline", float(guarded_sleeves["mainline"]))
+    _scale_sleeve_rows(rows, "thematic", float(guarded_sleeves["thematic"]))
 
     used_non_defensive = sum(float(row["target_weight_ratio"]) for row in rows)
-    defensive_weight = max(0.0, 100.0 - used_non_defensive)
+    defensive_weight = float(guarded_sleeves["defensive"])
     rows.append(
         _priced_row(
             code=str(DEFENSIVE_ETF["code"]),
@@ -901,24 +936,23 @@ def allocation_plan(
             -float(row["target_weight_ratio"]),
         ),
     )
-    actual_gate_reports = [*mainline_gate, *thematic_gate]
     gate_reports = _direction_gate_reports(signals, price_map, actual_gate_reports)
     gate_universe_audit = {
         "pre_gate_universe_size": len(actual_gate_reports),
-        "post_gate_universe_size": sum(
-            1 for row in actual_gate_reports if row.get("pre_gate_tradeable")
-        ),
+        "post_gate_universe_size": valid_universe_size,
+        "valid_universe_size": valid_universe_size,
         "filtered_universe_size": sum(
             1 for row in actual_gate_reports if not row.get("pre_gate_tradeable")
         ),
-        "mainline_unallocated_to_core_ratio": mainline_unused,
-        "thematic_unallocated_to_core_ratio": thematic_unused,
+        "mainline_unallocated_ratio": mainline_unused,
+        "thematic_unallocated_ratio": thematic_unused,
     }
     return {
         "market_risk_budget_ratio": sum(float(sleeves[key]) for key in ("core", "mainline", "thematic")),
         "risk_budget_ratio": used_non_defensive,
         "position_sizing": position_sizing,
         "gate_universe_audit": gate_universe_audit,
+        "structure_guard_report": structure_guard["structure_guard_report"],
         "sleeve_targets_before_gate": sleeves,
         "targets": sorted_rows,
         "etf_gate": gate_reports,
