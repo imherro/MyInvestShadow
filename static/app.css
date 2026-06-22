@@ -261,6 +261,28 @@ main {
   font-weight: 700;
 }
 
+.gate-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64px;
+  min-height: 24px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.gate-neutral {
+  background: #eef2f7;
+  color: #475467;
+}
+
+.gate-muted {
+  background: #f8fafc;
+  color: var(--muted);
+}
+
 .grade-a {
   background: #dcfce7;
   color: #166534;

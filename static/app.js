@@ -45,6 +45,35 @@ const instrumentBadge = (row) => row.is_synthetic
   ? `<span class="synthetic-badge">内部</span>`
   : "";
 
+function allocationGate(row) {
+  if (row.etf_gate_grade) {
+    return {
+      text: `${row.etf_gate_grade} / ${fmtPct(Number(row.etf_execution_ratio || 0) * 100, 0)}`,
+      className: `gate-label grade-${String(row.etf_gate_grade).toLowerCase()}`,
+      title: "主线/主题ETF门禁结果",
+    };
+  }
+  if (row.sleeve === "core") {
+    return {
+      text: "核心底仓",
+      className: "gate-label gate-neutral",
+      title: "核心宽基ETF底仓，不走主线/主题门禁",
+    };
+  }
+  if (row.sleeve === "defensive") {
+    return {
+      text: "防御承接",
+      className: "gate-label gate-neutral",
+      title: "承接未落地主线/主题仓位，不走主线/主题门禁",
+    };
+  }
+  return {
+    text: "待门禁",
+    className: "gate-label gate-muted",
+    title: "当前目标缺少门禁记录",
+  };
+}
+
 function showToast(message) {
   const el = byId("toast");
   el.textContent = message;
@@ -125,9 +154,7 @@ function renderAllocations(rows) {
     const pct = Number(row.pct_chg || 0);
     const driftClass = drift >= 0 ? "positive" : "negative";
     const pctClass = pct >= 0 ? "positive" : "negative";
-    const gate = row.etf_gate_grade
-      ? `${row.etf_gate_grade} / ${fmtPct(Number(row.etf_execution_ratio || 0) * 100, 0)}`
-      : "--";
+    const gate = allocationGate(row);
     return `
       <tr class="${row.is_synthetic ? "synthetic-row" : ""}">
         <td>${escapeHtml(instrumentCode(row))}${instrumentBadge(row)}</td>
@@ -137,7 +164,7 @@ function renderAllocations(rows) {
         <td>${fmtPct(row.target_weight_ratio, 2)}</td>
         <td class="${driftClass}">${fmtPct(drift, 2)}</td>
         <td class="${pctClass}">${row.pct_chg === null ? "--" : fmtPct(pct, 2)}</td>
-        <td>${gate}</td>
+        <td><span class="${gate.className}" title="${escapeHtml(gate.title)}">${escapeHtml(gate.text)}</span></td>
       </tr>
     `;
   }).join("");
