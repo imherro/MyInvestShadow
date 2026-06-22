@@ -26,6 +26,9 @@ const sleeveLabels = {
   mainline: "主线仓位",
   thematic: "主题仓位",
   defensive: "防御仓位",
+  mainline_watch: "主线备选",
+  watch: "观察备选",
+  candidate: "方向备选",
 };
 const sleeveShortLabels = {
   core: "核心",
@@ -260,6 +263,7 @@ function renderEtfGate(summary, rows) {
   }
   const ordered = [...rows].sort((a, b) => (
     Number(Boolean(b.selected)) - Number(Boolean(a.selected))
+    || Number(a.direction_rank || 999) - Number(b.direction_rank || 999)
     || Number(b.score || 0) - Number(a.score || 0)
   ));
   tbody.innerHTML = ordered.map((row) => {

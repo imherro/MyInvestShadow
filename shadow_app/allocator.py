@@ -200,6 +200,13 @@ def _signal_weight(signal: dict[str, Any]) -> float:
         return 0.0
 
 
+def _safe_rank(signal: dict[str, Any]) -> int:
+    try:
+        return int(signal.get("rank") or 999)
+    except (TypeError, ValueError):
+        return 999
+
+
 def _signal_candidates(signal: dict[str, Any]) -> list[dict[str, str]]:
     return extract_etf_candidates(signal.get("top_etf"))
 
@@ -243,14 +250,17 @@ def _representative_gate_report(
     sleeve: str,
     representative: dict[str, str] | None,
     reason: str,
+    scoring_sleeve: str | None = None,
 ) -> dict[str, Any]:
     report = evaluate_etf_gate(
         signal=signal,
         candidate=candidate,
         point=point,
-        sleeve=sleeve,
+        sleeve=scoring_sleeve or sleeve,
     )
+    report["sleeve"] = sleeve
     report["direction_key"] = _direction_key(signal)
+    report["direction_rank"] = _safe_rank(signal)
     report["direction_representative_code"] = (
         representative.get("code") if representative else candidate.get("code")
     )
@@ -260,6 +270,49 @@ def _representative_gate_report(
     report["selected"] = False
     report["reasons"] = [*report.get("reasons", []), reason]
     return report
+
+
+def _stage_priority(stage: str | None) -> int:
+    label = stage or ""
+    if "主线确认" in label:
+        return 0
+    if "次主线" in label or "强修复" in label:
+        return 1
+    if "观察" in label:
+        return 2
+    if "弱势" in label or "退潮" in label:
+        return 4
+    return 3
+
+
+def _direction_signal_sort_key(signal: dict[str, Any]) -> tuple[int, int, float, str]:
+    return (
+        _safe_rank(signal),
+        _stage_priority(str(signal.get("stage") or "")),
+        -_signal_weight(signal),
+        _direction_key(signal),
+    )
+
+
+def _direction_gate_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_direction: dict[str, dict[str, Any]] = {}
+    for signal in signals:
+        if not _signal_candidates(signal):
+            continue
+        direction_key = _direction_key(signal)
+        current = by_direction.get(direction_key)
+        if current is None or _direction_signal_sort_key(signal) < _direction_signal_sort_key(current):
+            by_direction[direction_key] = signal
+    return sorted(by_direction.values(), key=_direction_signal_sort_key)
+
+
+def _gate_display_sleeve(signal: dict[str, Any]) -> tuple[str, str]:
+    stage = str(signal.get("stage") or "")
+    if "主线确认" in stage or "次主线" in stage or "强修复" in stage:
+        return "mainline_watch", "mainline"
+    if "观察" in stage:
+        return "watch", "thematic"
+    return "candidate", "thematic"
 
 
 def _first_candidate(signal: dict[str, Any]) -> dict[str, str] | None:
@@ -372,7 +425,7 @@ def _mainline_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if _first_candidate(signal) is None:
             continue
         result.append(signal)
-    return sorted(result, key=lambda item: int(item.get("rank") or 999))[:3]
+    return sorted(result, key=_safe_rank)[:3]
 
 
 def _thematic_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -630,6 +683,95 @@ def _distribute_thematic_budget(
     return rows, unused, reviewed
 
 
+def _actual_gate_report_by_direction(
+    gate_reports: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    sleeve_priority = {"mainline": 0, "thematic": 1}
+    for report in gate_reports:
+        direction_key = str(report.get("direction_key") or report.get("theme") or "")
+        if not direction_key:
+            continue
+        current = result.get(direction_key)
+        if current is None:
+            result[direction_key] = report
+            continue
+        current_key = (
+            0 if current.get("selected") else 1,
+            sleeve_priority.get(str(current.get("sleeve") or ""), 9),
+            -float(current.get("score") or 0.0),
+        )
+        report_key = (
+            0 if report.get("selected") else 1,
+            sleeve_priority.get(str(report.get("sleeve") or ""), 9),
+            -float(report.get("score") or 0.0),
+        )
+        if report_key < current_key:
+            result[direction_key] = report
+    return result
+
+
+def _direction_gate_reports(
+    signals: list[dict[str, Any]],
+    price_map: dict[str, PricePoint],
+    actual_gate_reports: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    actual_by_direction = _actual_gate_report_by_direction(actual_gate_reports)
+    reports: list[dict[str, Any]] = []
+    for signal in _direction_gate_signals(signals):
+        direction_key = _direction_key(signal)
+        candidates = _signal_candidates(signal)
+        representative = _direction_representative_candidate(candidates, price_map)
+        if representative is None:
+            continue
+
+        actual = actual_by_direction.get(direction_key)
+        if (
+            actual is not None
+            and actual.get("direction_representative_code") == representative["code"]
+        ):
+            if not actual.get("selected") and float(actual.get("candidate_budget_ratio") or 0.0) <= 0.0:
+                display_sleeve, _scoring_sleeve = _gate_display_sleeve(signal)
+                actual = {
+                    **actual,
+                    "sleeve": display_sleeve,
+                    "reasons": list(
+                        dict.fromkeys(
+                            [
+                                *actual.get("reasons", []),
+                                "方向备选，未进入本次仓位",
+                            ]
+                        )
+                    ),
+                }
+                if display_sleeve == "watch":
+                    actual["reasons"] = list(
+                        dict.fromkeys([*actual.get("reasons", []), "观察线保留备选"])
+                    )
+            reports.append(actual)
+            continue
+
+        display_sleeve, scoring_sleeve = _gate_display_sleeve(signal)
+        report = _representative_gate_report(
+            signal=signal,
+            candidate=representative,
+            point=price_map.get(representative["code"]),
+            sleeve=display_sleeve,
+            scoring_sleeve=scoring_sleeve,
+            representative=representative,
+            reason="同方向成交额最大ETF",
+        )
+        report["reasons"] = [
+            *report.get("reasons", []),
+            "方向备选，未进入本次仓位",
+        ]
+        if display_sleeve == "watch":
+            report["reasons"] = [*report["reasons"], "观察线保留备选"]
+        report["reasons"] = list(dict.fromkeys(report.get("reasons", [])))
+        reports.append(report)
+    return reports
+
+
 def _gate_summary(gate_reports: list[dict[str, Any]]) -> dict[str, Any]:
     selected = [row for row in gate_reports if row.get("selected")]
     rejected = [row for row in gate_reports if row.get("execution_ratio") == 0.0]
@@ -659,7 +801,7 @@ def allocation_candidate_codes(
     signals = theme_payload.get("theme_signals") or []
     codes = {str(item["code"]) for item in CORE_ETF_BASKET}
     codes.add(str(DEFENSIVE_ETF["code"]))
-    for signal in [*_mainline_signals(signals), *_thematic_signals(signals)]:
+    for signal in _direction_gate_signals(signals):
         for candidate in _signal_candidates(signal):
             codes.add(candidate["code"])
     return sorted(codes)
@@ -715,7 +857,8 @@ def allocation_plan(
             -float(row["target_weight_ratio"]),
         ),
     )
-    gate_reports = [*mainline_gate, *thematic_gate]
+    actual_gate_reports = [*mainline_gate, *thematic_gate]
+    gate_reports = _direction_gate_reports(signals, price_map, actual_gate_reports)
     return {
         "market_risk_budget_ratio": sum(float(sleeves[key]) for key in ("core", "mainline", "thematic")),
         "risk_budget_ratio": used_non_defensive,

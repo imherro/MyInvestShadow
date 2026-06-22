@@ -254,6 +254,50 @@ def test_thematic_prefers_unheld_strong_market_performance() -> None:
     assert "主题仓位按市场表现优先" in thematic_rows[0]["etf_gate_reasons"]
 
 
+def test_unselected_observation_gate_stays_watch_backup() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "35%-45%",
+                    "market_position_score": 46.98,
+                }
+            }
+        }
+    }
+    theme_payload = {
+        "theme_signals": [
+            {
+                "rank": 1,
+                "theme": "硬科技电子/半导体",
+                "stage": "主线确认",
+                "score_weight_ratio": 90,
+                "evidence_score": 90,
+                "top_etf": "588170.SH 半导体ETF",
+            },
+            {
+                "rank": 3,
+                "theme": "低动能观察",
+                "stage": "观察线",
+                "score_weight_ratio": 85,
+                "evidence_score": 85,
+                "top_etf": "562500.SH 机器人ETF",
+            },
+        ]
+    }
+    price_map = {
+        "588170.SH": PricePoint("588170.SH", 1.0, 1.0, "test", amount=500_000, r5=5.0, r20=9.0, premium_rate=0.1),
+        "562500.SH": PricePoint("562500.SH", 1.0, -2.0, "test", amount=500_000, r5=-4.0, r20=-8.0, premium_rate=0.1),
+    }
+
+    plan = allocation_plan(market_payload, theme_payload, price_map)
+    watch_row = [row for row in plan["etf_gate"] if row["theme"] == "低动能观察"][0]
+
+    assert watch_row["sleeve"] == "watch"
+    assert watch_row["selected"] is False
+    assert "观察线保留备选" in watch_row["reasons"]
+
+
 def test_gate_keeps_largest_amount_etf_per_direction() -> None:
     market_payload = {
         "results": {
@@ -327,6 +371,52 @@ def test_thematic_excludes_direction_already_held_by_mainline() -> None:
     assert thematic_rows == []
     assert thematic_gate == []
     assert "159995.SZ" not in [row["code"] for row in plan["targets"]]
+
+
+def test_gate_keeps_observation_direction_as_watch_backup() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "35%-45%",
+                    "market_position_score": 46.98,
+                }
+            }
+        }
+    }
+    theme_payload = {
+        "theme_signals": [
+            {
+                "rank": 1,
+                "theme": "硬科技电子/半导体",
+                "stage": "主线确认",
+                "score_weight_ratio": 90,
+                "evidence_score": 90,
+                "top_etf": "588200.SH 芯片ETF",
+            },
+            {
+                "rank": 4,
+                "theme": "消费观察",
+                "stage": "观察线",
+                "score_weight_ratio": 65,
+                "evidence_score": 65,
+                "top_etf": "512690.SH 消费ETF、159928.SZ 消费ETF",
+            },
+        ]
+    }
+    price_map = {
+        "588200.SH": PricePoint("588200.SH", 1.0, 1.0, "test", amount=900_000, r5=5.0, r20=10.0, premium_rate=0.1),
+        "512690.SH": PricePoint("512690.SH", 1.0, -1.0, "test", amount=300_000, r5=-2.0, r20=-4.0, premium_rate=0.1),
+        "159928.SZ": PricePoint("159928.SZ", 1.0, -0.5, "test", amount=700_000, r5=-1.0, r20=-3.0, premium_rate=0.1),
+    }
+
+    plan = allocation_plan(market_payload, theme_payload, price_map)
+    gate_rows = {row["theme"]: row for row in plan["etf_gate"]}
+
+    assert gate_rows["消费观察"]["code"] == "159928.SZ"
+    assert gate_rows["消费观察"]["sleeve"] == "watch"
+    assert gate_rows["消费观察"]["selected"] is False
+    assert "观察线保留备选" in gate_rows["消费观察"]["reasons"]
 
 
 def test_weak_market_keeps_small_thematic_performance_budget() -> None:
