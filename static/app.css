@@ -8,8 +8,8 @@
   --accent: #0f766e;
   --accent-soft: #d9f3ee;
   --warn: #b7791f;
-  --good: #2f855a;
-  --bad: #b42318;
+  --rise: #b42318;
+  --fall: #0f766e;
 }
 
 * {
@@ -311,6 +311,26 @@ main {
   background: #fbfcfd;
 }
 
+.allocation-core {
+  background: #f3f7ff;
+}
+
+.allocation-mainline {
+  background: #effaf7;
+}
+
+.allocation-thematic {
+  background: #f7f2ff;
+}
+
+.allocation-defensive {
+  background: #fff8ea;
+}
+
+.allocation-row:hover {
+  filter: brightness(0.985);
+}
+
 .synthetic-badge {
   display: inline-flex;
   align-items: center;
@@ -327,10 +347,6 @@ main {
   max-width: 360px;
   white-space: normal;
   line-height: 1.45;
-}
-
-.gate-table {
-  max-height: 360px;
 }
 
 .table-wrap {
@@ -404,11 +420,11 @@ tbody tr:last-child td {
 }
 
 .positive {
-  color: var(--good);
+  color: var(--rise);
 }
 
 .negative {
-  color: var(--bad);
+  color: var(--fall);
 }
 
 .warn {

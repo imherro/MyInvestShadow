@@ -42,6 +42,12 @@ const actionClass = {
   decrease: "negative",
   exit: "negative",
 };
+const signClass = (value) => {
+  const number = Number(value || 0);
+  if (number > 0) return "positive";
+  if (number < 0) return "negative";
+  return "";
+};
 
 const instrumentCode = (row) => row.display_code || row.code || "--";
 const instrumentBadge = (row) => row.is_synthetic
@@ -155,11 +161,16 @@ function renderAllocations(rows) {
   tbody.innerHTML = rows.map((row) => {
     const drift = Number(row.drift_ratio || 0);
     const pct = Number(row.pct_chg || 0);
-    const driftClass = drift >= 0 ? "positive" : "negative";
-    const pctClass = pct >= 0 ? "positive" : "negative";
+    const driftClass = signClass(drift);
+    const pctClass = signClass(pct);
     const gate = allocationGate(row);
+    const rowClasses = [
+      "allocation-row",
+      `allocation-${row.sleeve || "unknown"}`,
+      row.is_synthetic ? "synthetic-row" : "",
+    ].filter(Boolean).join(" ");
     return `
-      <tr class="${row.is_synthetic ? "synthetic-row" : ""}">
+      <tr class="${rowClasses}">
         <td>${escapeHtml(instrumentCode(row))}${instrumentBadge(row)}</td>
         <td>${escapeHtml(row.name || row.code)}</td>
         <td>${sleeveLabels[row.sleeve] || row.sleeve || "--"}</td>
@@ -195,7 +206,7 @@ function renderRebalanceHistory(history) {
 
   tbody.innerHTML = rows.map((row) => {
     const drift = Number(row.drift_ratio || 0);
-    const driftClass = drift >= 0 ? "positive" : "negative";
+    const driftClass = signClass(drift);
     const action = row.action || "";
     return `
       <tr>
