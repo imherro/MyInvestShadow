@@ -284,15 +284,12 @@ def test_gate_keeps_largest_amount_etf_per_direction() -> None:
 
     plan = allocation_plan(market_payload, theme_payload, price_map)
     mainline_rows = [row for row in plan["targets"] if row["sleeve"] == "mainline"]
-    filtered = [
-        row for row in plan["etf_gate"]
-        if row["code"] == "588170.SH" and row["sleeve"] == "mainline"
-    ][0]
+    mainline_gate = [row for row in plan["etf_gate"] if row["sleeve"] == "mainline"]
 
     assert [row["code"] for row in mainline_rows] == ["159516.SZ"]
-    assert filtered["grade"] == "D"
-    assert "同方向非成交额最大ETF，不参与落地" in filtered["reject_reasons"]
-    assert filtered["direction_representative_code"] == "159516.SZ"
+    assert [row["code"] for row in mainline_gate] == ["159516.SZ"]
+    assert mainline_gate[0]["grade"] == "A"
+    assert mainline_gate[0]["direction_representative_code"] == "159516.SZ"
 
 
 def test_thematic_excludes_direction_already_held_by_mainline() -> None:
@@ -325,14 +322,10 @@ def test_thematic_excludes_direction_already_held_by_mainline() -> None:
 
     plan = allocation_plan(market_payload, theme_payload, price_map)
     thematic_rows = [row for row in plan["targets"] if row["sleeve"] == "thematic"]
-    thematic_rep = [
-        row for row in plan["etf_gate"]
-        if row["code"] == "588200.SH" and row["sleeve"] == "thematic"
-    ][0]
+    thematic_gate = [row for row in plan["etf_gate"] if row["sleeve"] == "thematic"]
 
     assert thematic_rows == []
-    assert thematic_rep["grade"] == "D"
-    assert "同方向已在主线仓位持有" in thematic_rep["reject_reasons"]
+    assert thematic_gate == []
     assert "159995.SZ" not in [row["code"] for row in plan["targets"]]
 
 

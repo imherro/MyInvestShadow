@@ -59,3 +59,20 @@ def test_build_index_payload_is_homepage_focused() -> None:
     assert payload["links"]["full_state"] == "/api/latest"
     assert "run_payload" not in payload
     assert "payload_json" not in payload["run"]
+
+
+def test_build_index_payload_uses_top_level_gate_fields() -> None:
+    state = {
+        "run": {"id": 8, "basis_date": "2026-06-18"},
+        "sleeve_summary": {},
+        "etf_gate_summary": {"reviewed_count": 2, "selected_count": 1},
+        "etf_gate": [
+            {"code": "588200.SH", "grade": "A"},
+            {"code": "562500.SH", "grade": "B"},
+        ],
+    }
+
+    payload = build_index_payload(state)
+
+    assert payload["etf_gate_summary"]["reviewed_count"] == 2
+    assert [row["code"] for row in payload["etf_gate"]] == ["588200.SH", "562500.SH"]

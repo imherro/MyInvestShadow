@@ -266,7 +266,7 @@ function renderEtfGate(summary, rows) {
     const reasonText = [...(row.reasons || []), ...(row.reject_reasons || [])]
       .slice(0, 3)
       .join("；");
-    const selectedMark = row.selected ? "已入选" : "";
+    const selectedMark = row.selected ? "已入选" : "备选";
     return `
       <tr class="${row.selected ? "selected-row" : ""}">
         <td>${escapeHtml(instrumentCode(row))}${instrumentBadge(row)}</td>

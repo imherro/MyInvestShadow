@@ -521,12 +521,16 @@ def latest_state() -> dict[str, Any]:
     init_db()
     with connect() as conn:
         run = latest_run(conn)
+        run_payload = loads(run["payload_json"]) if run else None
+        decision_trace = (run_payload or {}).get("decision_trace") or {}
         allocations = _allocations_for_run(conn, int(run["id"]) if run else None)
         return {
             "run": run,
-            "run_payload": loads(run["payload_json"]) if run else None,
+            "run_payload": run_payload,
             "allocations": allocations,
             "sleeve_summary": sleeve_summary(allocations),
+            "etf_gate_summary": decision_trace.get("etf_gate_summary") or {},
+            "etf_gate": decision_trace.get("etf_gate") or [],
             "nav_curve": nav_curve(conn),
             "rebalance_history": rebalance_history(conn),
             "source_status": source_status(conn),
@@ -537,6 +541,10 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
     run = state.get("run") or {}
     run_payload = state.get("run_payload") or {}
     decision_trace = run_payload.get("decision_trace") or {}
+    etf_gate_summary = (
+        state.get("etf_gate_summary") or decision_trace.get("etf_gate_summary") or {}
+    )
+    etf_gate = state.get("etf_gate") or decision_trace.get("etf_gate") or []
     sleeve_weights = state.get("sleeve_summary") or {}
     metrics = {
         "nav": run.get("nav"),
@@ -582,8 +590,8 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
             },
         ],
         "sleeve_summary": sleeve_weights,
-        "etf_gate_summary": decision_trace.get("etf_gate_summary") or {},
-        "etf_gate": decision_trace.get("etf_gate") or [],
+        "etf_gate_summary": etf_gate_summary,
+        "etf_gate": etf_gate,
         "nav_curve": state.get("nav_curve") or [],
         "allocations": state.get("allocations") or [],
         "rebalance_history": state.get("rebalance_history") or [],
