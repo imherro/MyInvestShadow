@@ -66,41 +66,30 @@ http://127.0.0.1:8013
 
 ## 主动仓位预算
 
-市场接口中的 `market_position_score`、`confidence` 和 `market_regime` 决定主动仓位上限。总仓位计算集中在 `portfolio/position_sizer.py` 的 `compute_target_position`，这是仓位大小的唯一确定性入口；`allocator.py` 只负责把该仓位拆成核心、主线、主题和防御结构。
+市场研究决定影子账户的总仓位边界和仓位结构。影子账户不重新判断市场强弱，只把市场研究和主线研究翻译成可交易 ETF 组合。
 
-计算规则：
+优先级：
 
-- 分数 `>= 70`：基础仓位 60%
-- 分数 `>= 55`：基础仓位 45%
-- 分数 `>= 40`：基础仓位 30%
-- 分数 `< 40`：基础仓位 15%
-- `confidence` 归一化到 `0.0-1.0` 后，只做轻微调整：`0.85 + 0.15 * confidence`
-- `regime=risk_on`：最终仓位加 10%
-- `regime=neutral` 或缺失：不调整
-- `regime=risk_off`：最终仓位减 10%
-- 最终仓位被限制在 `5%-80%`
+1. 如果市场结果提供完整 `sleeve_mix`，直接使用各仓位层区间中位数。
+2. 如果只有 `equity_position_range`，旧分数仓位只作为区间内取点依据，最终仓位必须落在该区间内。
+3. 如果市场结果缺少官方仓位区间，才使用 `portfolio/position_sizer.py` 中的旧分数分档 fallback。
 
-该函数返回可解释结构：
+`sleeve_mix` 映射：
 
-```python
-{
-    "final_position": 0.30,
-    "components": {
-        "base": 0.30,
-        "confidence_adj": 1.0,
-        "regime_adj": 0.0,
-    },
-}
-```
+- `sleeve_mix.core` -> 核心仓位
+- `sleeve_mix.offensive` 或 `sleeve_mix.mainline` -> 主线仓位
+- `sleeve_mix.thematic` -> 主题仓位
+- `sleeve_mix.defensive` -> 防御仓位
 
-主动仓位再拆成核心、主线、主题：
+如果 `sleeve_mix` 不完整，例如只提供 `thematic` 上限，则不接管全部结构；系统只把该字段作为主题上限，其他结构进入 fallback。防御仓位等于 `100% - 实际主动仓位`；门禁过滤造成的主线/主题缺口由结构守恒模块处理，不允许自动回补核心 ETF。
 
-- 分数 `>= 70`：核心 40%，主线 45%，主题 15%
-- 分数 `>= 55`：核心 45%，主线 45%，主题 10%
-- 分数 `>= 40`：核心 50%，主线 41.67%，主题 8.33%
-- 分数 `< 40`：核心 60%，主线 35%，主题 5%
+`/api/latest` 和 `/api/index` 会输出 `allocation_policy`，用于审计：
 
-如果市场结果提供 `sleeve_mix.thematic`，主题仓位不能超过该上限。防御仓位等于 `100% - 实际主动仓位`；门禁过滤造成的主线/主题缺口由结构守恒模块处理，不允许自动回补核心 ETF。
+- `position_source`：总仓位来自 `market.sleeve_mix`、`market.equity_position_range` 还是 fallback
+- `sleeve_source`：仓位层结构来自 `market.sleeve_mix` 还是 fallback
+- `fallback_used`：是否因为上游缺少官方仓位字段而使用旧分档
+- `equity_position_range`、`target_active_weight_ratio`、`range_violation`
+- `raw_sleeve_mix` 和最终 `sleeve_targets`
 
 ## 主线仓位规则
 
@@ -306,7 +295,7 @@ data/shadow_account.sqlite
 
 ```text
 portfolio/
-  position_sizer.py 总仓位计算唯一入口，输出 final_position 和 components
+  position_sizer.py 官方仓位字段缺失时的 fallback 仓位函数
   structure_guard.py 结构守恒约束和 safe mode
 etf/
   gate_filter.py    ETF 门禁前置过滤，只过滤可交易池，不做仓位缩放
@@ -326,7 +315,7 @@ templates/
   index.html        首页模板
 tests/
   test_system_stability.py regime sweep、ETF 池崩塌、噪声扰动和确定性压力测试
-  test_position_sizer.py 总仓位函数边界、confidence、regime 和确定性测试
+  test_position_sizer.py fallback 仓位函数边界、confidence、regime 和确定性测试
   test_structure_guard.py 结构守恒和 safe mode 测试
   test_gate_filter.py ETF 前置过滤测试
   test_allocator.py  仓位和门禁规则测试
@@ -344,8 +333,9 @@ python -m pytest -q
 当前测试覆盖重点：
 
 - 主线/主题仓位拆分
+- 市场 `equity_position_range` 和完整 `sleeve_mix` 驱动仓位
 - 系统稳定性：regime sweep、ETF universe collapse、signal noise、100 次确定性重复
-- 总仓位函数的 score 边界、confidence 调整、regime 调整和确定性
+- fallback 仓位函数的 score 边界、confidence 调整、regime 调整和确定性
 - ETF 门禁前置过滤，不做仓位缩放
 - 结构守恒、非核心池重分配和 safe mode
 - 同方向只保留成交额最大 ETF
@@ -363,7 +353,8 @@ python -m pytest -q
 建议审计时重点看：
 
 - 是否真的没有读取真实持仓或输出真实交易指令。
-- 总仓位是否只通过 `compute_target_position` 生成，并输出可解释 components。
+- 总仓位是否优先来自市场研究的 `sleeve_mix` / `equity_position_range`，且没有越过官方区间。
+- `compute_target_position` 是否只在官方仓位字段缺失时作为 fallback 使用。
 - `run_daily_rebalance` 是否在上游失败或基准日不一致时停止生成正式仓位。
 - 主线仓位和主题仓位是否会选择重复方向。
 - ETF 门禁是否在 allocator 分配前执行，并通过 `gate_universe_audit` 暴露过滤前后数量。

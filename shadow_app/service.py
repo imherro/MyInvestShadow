@@ -257,6 +257,7 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
             "sleeve_summary": summary,
             "market_risk_budget_ratio": plan["market_risk_budget_ratio"],
             "position_sizing": plan["position_sizing"],
+            "allocation_policy": plan["allocation_policy"],
             "gate_universe_audit": plan["gate_universe_audit"],
             "structure_guard_report": plan["structure_guard_report"],
             "sleeve_targets_before_gate": plan["sleeve_targets_before_gate"],
@@ -264,6 +265,7 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
             "decision_trace": {
                 "market_risk_budget_ratio": plan["market_risk_budget_ratio"],
                 "position_sizing": plan["position_sizing"],
+                "allocation_policy": plan["allocation_policy"],
                 "gate_universe_audit": plan["gate_universe_audit"],
                 "structure_guard_report": plan["structure_guard_report"],
                 "sleeve_targets_before_gate": plan["sleeve_targets_before_gate"],
@@ -571,6 +573,9 @@ def latest_state() -> dict[str, Any]:
             "run_payload": run_payload,
             "allocations": allocations,
             "sleeve_summary": sleeve_summary(allocations),
+            "allocation_policy": decision_trace.get("allocation_policy")
+            or (run_payload or {}).get("allocation_policy")
+            or {},
             "etf_gate_summary": decision_trace.get("etf_gate_summary") or {},
             "etf_gate": decision_trace.get("etf_gate") or [],
             "nav_curve": nav_curve(conn),
@@ -589,6 +594,12 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
     etf_gate = state.get("etf_gate") or decision_trace.get("etf_gate") or []
     gate_universe_audit = decision_trace.get("gate_universe_audit") or {}
     structure_guard_report = decision_trace.get("structure_guard_report") or {}
+    allocation_policy = (
+        state.get("allocation_policy")
+        or decision_trace.get("allocation_policy")
+        or run_payload.get("allocation_policy")
+        or {}
+    )
     sleeve_weights = state.get("sleeve_summary") or {}
     metrics = {
         "nav": run.get("nav"),
@@ -634,6 +645,7 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
             },
         ],
         "sleeve_summary": sleeve_weights,
+        "allocation_policy": allocation_policy,
         "gate_universe_audit": gate_universe_audit,
         "structure_guard_report": structure_guard_report,
         "etf_gate_summary": etf_gate_summary,

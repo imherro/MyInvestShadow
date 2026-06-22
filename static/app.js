@@ -307,6 +307,34 @@ function renderEtfGate(summary, rows) {
   }).join("");
 }
 
+function renderAllocationPolicy(policy) {
+  const el = byId("policyStatus");
+  if (!policy || !Object.keys(policy).length) {
+    el.innerHTML = "";
+    return;
+  }
+  const sourceLabels = {
+    "market.sleeve_mix": "市场仓位结构",
+    "market.equity_position_range": "市场仓位区间",
+    "shadow_fallback_score_bands": "影子备用规则",
+  };
+  const source = sourceLabels[policy.position_source] || policy.position_source || "--";
+  const sleeveSource = sourceLabels[policy.sleeve_source] || policy.sleeve_source || "--";
+  const status = policy.range_violation ? "越界" : "区间内";
+  const statusClass = policy.range_violation ? "negative" : "positive";
+  el.innerHTML = `
+    <div class="status-item">
+      <strong>仓位政策 ${escapeHtml(source)}</strong>
+      <p>
+        官方区间：${escapeHtml(policy.equity_position_range || "--")}<br>
+        主动仓位：${fmtPct(policy.target_active_weight_ratio, 2)}，
+        <span class="${statusClass}">${status}</span><br>
+        仓位层来源：${escapeHtml(sleeveSource)}${policy.fallback_used ? " / fallback" : ""}
+      </p>
+    </div>
+  `;
+}
+
 function renderSources(rows) {
   byId("statusText").textContent = rows.length ? "已连接上游" : "暂无快照";
   byId("sourceStatus").innerHTML = rows.map((row) => `
@@ -325,6 +353,7 @@ function render(data) {
   renderEtfGate(data.etf_gate_summary || {}, data.etf_gate || []);
   renderAllocations(data.allocations || []);
   renderRebalanceHistory(data.rebalance_history || []);
+  renderAllocationPolicy(data.allocation_policy || {});
   renderSources(data.source_status || []);
 }
 

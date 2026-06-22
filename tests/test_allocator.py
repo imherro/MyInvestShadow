@@ -59,7 +59,7 @@ def test_normalize_theme_api_latest_shape() -> None:
     assert result["market_context"]["broad_indexes"][0]["code"] == "000300.SH"
 
 
-def test_risk_budget_uses_single_position_sizer() -> None:
+def test_risk_budget_respects_market_equity_range_floor() -> None:
     market_payload = {
         "results": {
             "market_score": {
@@ -71,7 +71,45 @@ def test_risk_budget_uses_single_position_sizer() -> None:
         }
     }
 
-    assert risk_budget_from_market(market_payload) == 30.0
+    plan = allocation_plan(market_payload, {"theme_signals": []}, {})
+
+    assert risk_budget_from_market(market_payload) == 35.0
+    assert plan["allocation_policy"]["position_source"] == "market.equity_position_range"
+    assert plan["allocation_policy"]["range_clamped"] is True
+    assert plan["allocation_policy"]["range_violation"] is False
+
+
+def test_complete_market_sleeve_mix_drives_position_structure() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "20%-40%",
+                    "market_position_score": 35.0,
+                    "sleeve_mix": {
+                        "core": "20%-30%",
+                        "offensive": "0%-15%",
+                        "defensive": "55%-75%",
+                        "thematic": "0%-5%",
+                    },
+                }
+            }
+        }
+    }
+
+    plan = allocation_plan(market_payload, {"theme_signals": []}, {})
+
+    assert risk_budget_from_market(market_payload) == 35.0
+    assert plan["sleeve_targets_before_gate"] == {
+        "core": 25.0,
+        "mainline": 7.5,
+        "thematic": 2.5,
+        "defensive": 65.0,
+    }
+    assert plan["allocation_policy"]["position_source"] == "market.sleeve_mix"
+    assert plan["allocation_policy"]["sleeve_source"] == "market.sleeve_mix"
+    assert plan["allocation_policy"]["fallback_used"] is False
+    assert plan["allocation_policy"]["range_violation"] is False
 
 
 def test_target_allocations_use_four_sleeves() -> None:
@@ -157,14 +195,14 @@ def test_target_allocations_use_four_sleeves() -> None:
     budget, rows = target_allocations(market_payload, theme_payload, price_map)
     summary = sleeve_summary(rows)
 
-    assert round(budget, 2) == 30.0
+    assert round(budget, 2) == 35.0
     assert round(sum(row["target_weight_ratio"] for row in rows), 6) == 100.0
     rounded_summary = {key: round(value, 4) for key, value in summary.items()}
     assert rounded_summary == {
-        "core": 15.0,
-        "mainline": 12.501,
-        "thematic": 2.499,
-        "defensive": 70.0,
+        "core": 17.5,
+        "mainline": 14.5845,
+        "thematic": 2.9155,
+        "defensive": 65.0,
     }
     assert [row["code"] for row in rows] == [
         "510300.SH",
@@ -175,7 +213,7 @@ def test_target_allocations_use_four_sleeves() -> None:
         DEFENSIVE_ETF["code"],
     ]
     assert rows[0]["name"] == "华泰柏瑞沪深300ETF"
-    assert round(rows[0]["target_weight_ratio"], 4) == 9.0
+    assert round(rows[0]["target_weight_ratio"], 4) == 10.5
     assert rows[-1]["name"] == "银华货币ETF-A"
     assert all(row["instrument_type"] == "etf" for row in rows)
     assert all(row["is_synthetic"] is False for row in rows)
@@ -312,7 +350,7 @@ def test_thematic_prefers_unheld_strong_market_performance() -> None:
     thematic_rows = [row for row in plan["targets"] if row["sleeve"] == "thematic"]
 
     assert [row["code"] for row in thematic_rows] == ["159663.SZ"]
-    assert round(thematic_rows[0]["target_weight_ratio"], 4) == 2.499
+    assert round(thematic_rows[0]["target_weight_ratio"], 4) == 2.9155
     assert "主题仓位按市场表现优先" in thematic_rows[0]["etf_gate_reasons"]
 
 
@@ -562,10 +600,10 @@ def test_weak_market_keeps_sub_one_percent_thematic_after_pre_gate() -> None:
     plan = allocation_plan(market_payload, theme_payload, price_map)
     summary = sleeve_summary(plan["targets"])
 
-    assert round(summary["core"], 4) == 9.0
-    assert round(summary["mainline"], 4) == 5.25
-    assert round(summary["thematic"], 4) == 0.75
-    assert round(plan["risk_budget_ratio"], 4) == 15.0
+    assert round(summary["core"], 4) == 21.0
+    assert round(summary["mainline"], 4) == 12.25
+    assert round(summary["thematic"], 4) == 1.75
+    assert round(plan["risk_budget_ratio"], 4) == 35.0
 
 
 def test_structure_guard_safe_mode_keeps_missing_data_budget_defensive() -> None:
@@ -594,11 +632,11 @@ def test_structure_guard_safe_mode_keeps_missing_data_budget_defensive() -> None
     plan = allocation_plan(market_payload, theme_payload, {})
     summary = sleeve_summary(plan["targets"])
 
-    assert round(plan["market_risk_budget_ratio"], 2) == 30.0
-    assert round(plan["risk_budget_ratio"], 2) == 15.0
-    assert summary["core"] == 15.0
+    assert round(plan["market_risk_budget_ratio"], 2) == 35.0
+    assert round(plan["risk_budget_ratio"], 2) == 17.5
+    assert summary["core"] == 17.5
     assert summary["mainline"] == 0.0
-    assert summary["defensive"] == 85.0
+    assert summary["defensive"] == 82.5
     assert {row["code"] for row in plan["targets"] if row["sleeve"] == "defensive"} == {
         DEFENSIVE_ETF["code"]
     }
@@ -606,8 +644,8 @@ def test_structure_guard_safe_mode_keeps_missing_data_budget_defensive() -> None
     assert "缺少可验证交易数据" in plan["etf_gate"][0]["reject_reasons"]
     assert plan["gate_universe_audit"]["pre_gate_universe_size"] == 2
     assert plan["gate_universe_audit"]["post_gate_universe_size"] == 0
-    assert round(plan["gate_universe_audit"]["mainline_unallocated_ratio"], 4) == 12.501
-    assert round(plan["gate_universe_audit"]["thematic_unallocated_ratio"], 4) == 2.499
+    assert round(plan["gate_universe_audit"]["mainline_unallocated_ratio"], 4) == 14.5845
+    assert round(plan["gate_universe_audit"]["thematic_unallocated_ratio"], 4) == 2.9155
     assert plan["structure_guard_report"]["safe_mode_triggered"] is True
     assert plan["structure_guard_report"]["active_sum_check"] is True
     assert plan["structure_guard_report"]["total_sum_check"] is True
@@ -654,11 +692,11 @@ def test_pre_gate_keeps_tradeable_overheated_candidate_without_discount() -> Non
     assert plan["etf_gate"][0]["grade"] == "C"
     assert plan["etf_gate"][0]["pre_gate_execution_ratio"] == 0.45
     assert plan["etf_gate"][0]["execution_ratio"] == 1.0
-    assert round(rows["588170.SH"]["target_weight_ratio"], 4) == 15.0
-    assert round(rows[DEFENSIVE_ETF["code"]]["target_weight_ratio"], 4) == 70.0
-    assert round(plan["gate_universe_audit"]["thematic_unallocated_ratio"], 4) == 2.499
+    assert round(rows["588170.SH"]["target_weight_ratio"], 4) == 17.5
+    assert round(rows[DEFENSIVE_ETF["code"]]["target_weight_ratio"], 4) == 65.0
+    assert round(plan["gate_universe_audit"]["thematic_unallocated_ratio"], 4) == 2.9155
     assert plan["structure_guard_report"]["safe_mode_triggered"] is False
-    assert plan["structure_guard_report"]["redistributed_ratio"]["mainline"] == 2.499
+    assert plan["structure_guard_report"]["redistributed_ratio"]["mainline"] == 2.9155
 
 
 def test_legacy_core_return_uses_core_etf_basket() -> None:

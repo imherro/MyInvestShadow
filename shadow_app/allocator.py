@@ -55,14 +55,24 @@ def clamp(value: float, low: float, high: float) -> float:
 
 
 def parse_percent_range(value: str | None) -> float | None:
+    bounds = parse_percent_range_bounds(value)
+    if bounds is None:
+        return None
+    low, high = bounds
+    return clamp((low + high) / 2, 0.0, 100.0)
+
+
+def parse_percent_range_bounds(value: str | None) -> tuple[float, float] | None:
     if not value:
         return None
     numbers = [float(item) for item in re.findall(r"\d+(?:\.\d+)?", value)]
     if not numbers:
         return None
     if len(numbers) == 1:
-        return clamp(numbers[0], 0.0, 100.0)
-    return clamp(sum(numbers[:2]) / 2, 0.0, 100.0)
+        number = clamp(numbers[0], 0.0, 100.0)
+        return number, number
+    low, high = sorted(numbers[:2])
+    return clamp(low, 0.0, 100.0), clamp(high, 0.0, 100.0)
 
 
 def extract_etf_candidates(text: str | None) -> list[dict[str, str]]:
@@ -132,25 +142,113 @@ def _regime_value(record: dict[str, Any]) -> str | None:
     return "neutral"
 
 
+def _official_equity_position_range(record: dict[str, Any]) -> str | None:
+    return (
+        record.get("recommended_equity_position_range")
+        or record.get("equity_position_range")
+        or record.get("base_equity_position_range")
+    )
+
+
+def _complete_market_sleeve_mix(record: dict[str, Any]) -> dict[str, float] | None:
+    mix = record.get("sleeve_mix")
+    if not isinstance(mix, dict):
+        return None
+    core = parse_percent_range(mix.get("core"))
+    mainline = parse_percent_range(mix.get("mainline") or mix.get("offensive"))
+    thematic = parse_percent_range(mix.get("thematic"))
+    defensive = parse_percent_range(mix.get("defensive"))
+    if None in {core, mainline, thematic, defensive}:
+        return None
+    return {
+        "core": float(core),
+        "mainline": float(mainline),
+        "thematic": float(thematic),
+        "defensive": float(defensive),
+    }
+
+
+def _scale_active_sleeves(
+    sleeves: dict[str, float], target_active: float
+) -> dict[str, float]:
+    active = sum(float(sleeves[key]) for key in ("core", "mainline", "thematic"))
+    if active <= 0.0:
+        return {
+            "core": 0.0,
+            "mainline": 0.0,
+            "thematic": 0.0,
+            "defensive": 100.0,
+        }
+    scale = target_active / active
+    core = float(sleeves["core"]) * scale
+    mainline = float(sleeves["mainline"]) * scale
+    thematic = float(sleeves["thematic"]) * scale
+    return {
+        "core": core,
+        "mainline": mainline,
+        "thematic": thematic,
+        "defensive": max(0.0, 100.0 - core - mainline - thematic),
+    }
+
+
 def _position_sizing_from_market(market_payload: dict[str, Any]) -> dict[str, Any]:
     record = market_record(market_payload)
     score_value = _market_score_value(record)
     confidence = _confidence_value(record)
     regime = _regime_value(record)
-    sizing = compute_target_position(score_value, confidence, regime)
+    range_text = _official_equity_position_range(record)
+    range_bounds = parse_percent_range_bounds(range_text)
+    market_sleeves = _complete_market_sleeve_mix(record)
+    fallback_sizing = compute_target_position(score_value, confidence, regime)
+    fallback_position = float(fallback_sizing["final_position"])
+
+    source = "shadow_fallback_score_bands"
+    final_position = fallback_position
+    range_clamped = False
+    sleeve_mix_active: float | None = None
+
+    if market_sleeves is not None:
+        sleeve_mix_active = (
+            market_sleeves["core"] + market_sleeves["mainline"] + market_sleeves["thematic"]
+        ) / 100.0
+        final_position = sleeve_mix_active
+        source = "market.sleeve_mix"
+    elif range_bounds is not None:
+        final_position = fallback_position
+        source = "market.equity_position_range"
+
+    if range_bounds is not None:
+        low, high = range_bounds
+        before = final_position
+        final_position = clamp(final_position * 100.0, low, high) / 100.0
+        range_clamped = abs(final_position - before) > 1e-9
+
     return {
-        **sizing,
+        "final_position": round(final_position, 6),
+        "components": {
+            **fallback_sizing["components"],
+            "source": source,
+            "fallback_score_position": fallback_position,
+            "sleeve_mix_active": (
+                round(sleeve_mix_active, 6) if sleeve_mix_active is not None else None
+            ),
+            "equity_range_low": range_bounds[0] / 100.0 if range_bounds else None,
+            "equity_range_high": range_bounds[1] / 100.0 if range_bounds else None,
+            "range_clamped": range_clamped,
+            "fallback_used": source == "shadow_fallback_score_bands",
+        },
         "inputs": {
             "market_score": score_value,
             "confidence": confidence,
             "regime": regime,
+            "equity_position_range": range_text,
         },
     }
 
 
 def risk_budget_from_market(market_payload: dict[str, Any]) -> float:
-    sizing = _position_sizing_from_market(market_payload)
-    return float(sizing["final_position"]) * 100.0
+    sleeves = sleeve_targets_from_market(market_payload)
+    return sum(float(sleeves[key]) for key in ("core", "mainline", "thematic"))
 
 
 def sleeve_targets_from_market(market_payload: dict[str, Any]) -> dict[str, float]:
@@ -158,6 +256,17 @@ def sleeve_targets_from_market(market_payload: dict[str, Any]) -> dict[str, floa
     active_ratio = float(sizing["final_position"]) * 100.0
     record = market_record(market_payload)
     score_value = _market_score_value(record)
+    market_sleeves = _complete_market_sleeve_mix(record)
+    if market_sleeves is not None:
+        active = sum(float(market_sleeves[key]) for key in ("core", "mainline", "thematic"))
+        if abs(active - active_ratio) > 1e-6:
+            return _scale_active_sleeves(market_sleeves, active_ratio)
+        return {
+            "core": market_sleeves["core"],
+            "mainline": market_sleeves["mainline"],
+            "thematic": market_sleeves["thematic"],
+            "defensive": max(0.0, 100.0 - active),
+        }
 
     if score_value >= 70:
         core_share, mainline_share, thematic_share = 0.40, 0.45, 0.15
@@ -180,6 +289,41 @@ def sleeve_targets_from_market(market_payload: dict[str, Any]) -> dict[str, floa
         "mainline": mainline,
         "thematic": thematic,
         "defensive": defensive,
+    }
+
+
+def allocation_policy_from_market(
+    market_payload: dict[str, Any],
+    sleeves: dict[str, float],
+    position_sizing: dict[str, Any],
+) -> dict[str, Any]:
+    record = market_record(market_payload)
+    range_text = _official_equity_position_range(record)
+    range_bounds = parse_percent_range_bounds(range_text)
+    components = position_sizing.get("components") or {}
+    active = sum(float(sleeves[key]) for key in ("core", "mainline", "thematic"))
+    low = range_bounds[0] if range_bounds else None
+    high = range_bounds[1] if range_bounds else None
+    range_violation = False
+    if low is not None and high is not None:
+        range_violation = active < low - 1e-6 or active > high + 1e-6
+    sleeve_source = (
+        "market.sleeve_mix"
+        if _complete_market_sleeve_mix(record) is not None
+        else "shadow_fallback_score_bands"
+    )
+    return {
+        "position_source": components.get("source"),
+        "sleeve_source": sleeve_source,
+        "fallback_used": bool(components.get("fallback_used")),
+        "equity_position_range": range_text,
+        "equity_range_low": low,
+        "equity_range_high": high,
+        "target_active_weight_ratio": active,
+        "range_clamped": bool(components.get("range_clamped")),
+        "range_violation": range_violation,
+        "raw_sleeve_mix": record.get("sleeve_mix") or {},
+        "sleeve_targets": dict(sleeves),
     }
 
 
@@ -891,6 +1035,9 @@ def allocation_plan(
     price_map = price_map or {}
     position_sizing = _position_sizing_from_market(market_payload)
     sleeves = sleeve_targets_from_market(market_payload)
+    allocation_policy = allocation_policy_from_market(
+        market_payload, sleeves, position_sizing
+    )
     signals = theme_payload.get("theme_signals") or []
 
     rows: list[dict[str, Any]] = []
@@ -969,6 +1116,7 @@ def allocation_plan(
         "market_risk_budget_ratio": sum(float(sleeves[key]) for key in ("core", "mainline", "thematic")),
         "risk_budget_ratio": used_non_defensive,
         "position_sizing": position_sizing,
+        "allocation_policy": allocation_policy,
         "gate_universe_audit": gate_universe_audit,
         "structure_guard_report": structure_guard["structure_guard_report"],
         "sleeve_targets_before_gate": sleeves,

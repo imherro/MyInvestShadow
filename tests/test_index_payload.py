@@ -37,6 +37,10 @@ def test_build_index_payload_is_homepage_focused() -> None:
             "decision_trace": {
                 "etf_gate_summary": {"reviewed_count": 1, "selected_count": 1},
                 "etf_gate": [{"code": "588170.SH", "grade": "A"}],
+                "allocation_policy": {
+                    "position_source": "market.sleeve_mix",
+                    "range_violation": False,
+                },
             }
         },
         "source_status": [{"source": "theme", "ok": 1}],
@@ -54,6 +58,8 @@ def test_build_index_payload_is_homepage_focused() -> None:
     assert payload["allocations"][0]["code"] == "510300.SH"
     assert payload["etf_gate_summary"]["reviewed_count"] == 1
     assert payload["etf_gate"][0]["grade"] == "A"
+    assert payload["allocation_policy"]["position_source"] == "market.sleeve_mix"
+    assert payload["allocation_policy"]["range_violation"] is False
     assert payload["rebalance_history"][0]["basis_date"] == "2026-06-17"
     assert payload["links"]["rebalance_history"] == "/api/rebalance-history"
     assert payload["links"]["full_state"] == "/api/latest"
