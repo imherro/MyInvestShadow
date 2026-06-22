@@ -254,6 +254,88 @@ def test_thematic_prefers_unheld_strong_market_performance() -> None:
     assert "主题仓位按市场表现优先" in thematic_rows[0]["etf_gate_reasons"]
 
 
+def test_gate_keeps_largest_amount_etf_per_direction() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "35%-45%",
+                    "market_position_score": 46.98,
+                }
+            }
+        }
+    }
+    theme_payload = {
+        "theme_signals": [
+            {
+                "rank": 1,
+                "theme": "硬科技电子/半导体",
+                "stage": "主线确认",
+                "score_weight_ratio": 90,
+                "evidence_score": 90,
+                "top_etf": "588170.SH 半导体ETF、159516.SZ 芯片ETF",
+            }
+        ]
+    }
+    price_map = {
+        "588170.SH": PricePoint("588170.SH", 1.0, 1.0, "test", amount=100_000, r5=8.0, r20=15.0, premium_rate=0.1),
+        "159516.SZ": PricePoint("159516.SZ", 1.0, 1.0, "test", amount=600_000, r5=6.0, r20=12.0, premium_rate=0.1),
+    }
+
+    plan = allocation_plan(market_payload, theme_payload, price_map)
+    mainline_rows = [row for row in plan["targets"] if row["sleeve"] == "mainline"]
+    filtered = [
+        row for row in plan["etf_gate"]
+        if row["code"] == "588170.SH" and row["sleeve"] == "mainline"
+    ][0]
+
+    assert [row["code"] for row in mainline_rows] == ["159516.SZ"]
+    assert filtered["grade"] == "D"
+    assert "同方向非成交额最大ETF，不参与落地" in filtered["reject_reasons"]
+    assert filtered["direction_representative_code"] == "159516.SZ"
+
+
+def test_thematic_excludes_direction_already_held_by_mainline() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "35%-45%",
+                    "market_position_score": 46.98,
+                }
+            }
+        }
+    }
+    theme_payload = {
+        "theme_signals": [
+            {
+                "rank": 1,
+                "theme": "硬科技电子/半导体",
+                "stage": "主线确认",
+                "score_weight_ratio": 90,
+                "evidence_score": 90,
+                "top_etf": "588200.SH 芯片ETF、159995.SZ 半导体ETF",
+            }
+        ]
+    }
+    price_map = {
+        "588200.SH": PricePoint("588200.SH", 1.0, 1.0, "test", amount=900_000, r5=5.0, r20=10.0, premium_rate=0.1),
+        "159995.SZ": PricePoint("159995.SZ", 1.0, 4.0, "test", amount=500_000, r5=15.0, r20=25.0, premium_rate=0.1),
+    }
+
+    plan = allocation_plan(market_payload, theme_payload, price_map)
+    thematic_rows = [row for row in plan["targets"] if row["sleeve"] == "thematic"]
+    thematic_rep = [
+        row for row in plan["etf_gate"]
+        if row["code"] == "588200.SH" and row["sleeve"] == "thematic"
+    ][0]
+
+    assert thematic_rows == []
+    assert thematic_rep["grade"] == "D"
+    assert "同方向已在主线仓位持有" in thematic_rep["reject_reasons"]
+    assert "159995.SZ" not in [row["code"] for row in plan["targets"]]
+
+
 def test_weak_market_keeps_small_thematic_performance_budget() -> None:
     market_payload = {
         "results": {

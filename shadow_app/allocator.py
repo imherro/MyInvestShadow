@@ -204,6 +204,73 @@ def _signal_candidates(signal: dict[str, Any]) -> list[dict[str, str]]:
     return extract_etf_candidates(signal.get("top_etf"))
 
 
+def _direction_key(signal: dict[str, Any]) -> str:
+    return str(signal.get("theme") or "未命名方向").strip() or "未命名方向"
+
+
+def _liquidity_key(point: PricePoint | None) -> tuple[int, float, int, float]:
+    if point is None:
+        return (0, 0.0, 0, 0.0)
+    amount = point.amount
+    amount_rank = point.amount_rank
+    return (
+        1 if amount is not None else 0,
+        float(amount or 0.0),
+        1 if amount_rank is not None else 0,
+        float(amount_rank or 0.0),
+    )
+
+
+def _direction_representative_candidate(
+    candidates: list[dict[str, str]], price_map: dict[str, PricePoint]
+) -> dict[str, str] | None:
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda candidate: (
+            *_liquidity_key(price_map.get(candidate["code"])),
+            candidate["code"],
+        ),
+    )
+
+
+def _direction_gate_report(
+    *,
+    signal: dict[str, Any],
+    candidate: dict[str, str],
+    point: PricePoint | None,
+    sleeve: str,
+    representative: dict[str, str] | None,
+    passed: bool,
+    reason: str,
+) -> dict[str, Any]:
+    report = evaluate_etf_gate(
+        signal=signal,
+        candidate=candidate,
+        point=point,
+        sleeve=sleeve,
+    )
+    report["direction_key"] = _direction_key(signal)
+    report["direction_representative_code"] = (
+        representative.get("code") if representative else candidate.get("code")
+    )
+    report["direction_filter_pass"] = passed
+    report["candidate_budget_ratio"] = 0.0
+    report["executed_weight_ratio"] = 0.0
+    report["selected"] = False
+    if passed:
+        report["reasons"] = [*report.get("reasons", []), reason]
+        return report
+
+    report["grade"] = "D"
+    report["hard_pass"] = False
+    report["execution_ratio"] = 0.0
+    report["reasons"] = [*report.get("reasons", []), reason]
+    report["reject_reasons"] = [*report.get("reject_reasons", []), reason]
+    return report
+
+
 def _first_candidate(signal: dict[str, Any]) -> dict[str, str] | None:
     candidates = _signal_candidates(signal)
     return candidates[0] if candidates else None
@@ -365,20 +432,41 @@ def _distribute_budget(
         candidates = _signal_candidates(signal)
         if not candidates:
             continue
+        representative = _direction_representative_candidate(candidates, price_map)
+        if representative is None:
+            continue
         target_weight = budget * weight / total_weight
         if target_weight < 1.0:
             unused += target_weight
             continue
-        evaluated = [
-            evaluate_etf_gate(
-                signal=signal,
-                candidate=candidate,
-                point=price_map.get(candidate["code"]),
-                sleeve=sleeve,
+        evaluated: list[dict[str, Any]] = []
+        for candidate in candidates:
+            point = price_map.get(candidate["code"])
+            if candidate["code"] != representative["code"]:
+                evaluated.append(
+                    _direction_gate_report(
+                        signal=signal,
+                        candidate=candidate,
+                        point=point,
+                        sleeve=sleeve,
+                        representative=representative,
+                        passed=False,
+                        reason="同方向非成交额最大ETF，不参与落地",
+                    )
+                )
+                continue
+            evaluated.append(
+                _direction_gate_report(
+                    signal=signal,
+                    candidate=candidate,
+                    point=point,
+                    sleeve=sleeve,
+                    representative=representative,
+                    passed=True,
+                    reason="同方向成交额最大ETF",
+                )
             )
-            for candidate in candidates
-        ]
-        selected = max(evaluated, key=lambda item: (item["execution_ratio"], item["score"]))
+        selected = next(row for row in evaluated if row["code"] == representative["code"])
         executed_weight = target_weight * float(selected["execution_ratio"])
         unused += max(0.0, target_weight - executed_weight)
         for report in evaluated:
@@ -428,22 +516,68 @@ def _distribute_thematic_budget(
     budget: float,
     price_map: dict[str, PricePoint],
     excluded_codes: set[str],
+    excluded_directions: set[str],
 ) -> tuple[list[dict[str, Any]], float, list[dict[str, Any]]]:
     if budget <= 0 or not signals:
         return [], budget, []
 
     reviewed: list[dict[str, Any]] = []
     for signal in signals:
-        for candidate in _signal_candidates(signal):
+        direction_key = _direction_key(signal)
+        candidates = _signal_candidates(signal)
+        representative = _direction_representative_candidate(candidates, price_map)
+        if representative is None:
+            continue
+        for candidate in candidates:
             code = candidate["code"]
-            if code in excluded_codes:
-                continue
             point = price_map.get(code)
-            report = evaluate_etf_gate(
+            if code != representative["code"]:
+                reviewed.append(
+                    _direction_gate_report(
+                        signal=signal,
+                        candidate=candidate,
+                        point=point,
+                        sleeve="thematic",
+                        representative=representative,
+                        passed=False,
+                        reason="同方向非成交额最大ETF，不参与落地",
+                    )
+                )
+                continue
+            if direction_key in excluded_directions:
+                reviewed.append(
+                    _direction_gate_report(
+                        signal=signal,
+                        candidate=candidate,
+                        point=point,
+                        sleeve="thematic",
+                        representative=representative,
+                        passed=False,
+                        reason="同方向已在主线仓位持有",
+                    )
+                )
+                continue
+            if code in excluded_codes:
+                reviewed.append(
+                    _direction_gate_report(
+                        signal=signal,
+                        candidate=candidate,
+                        point=point,
+                        sleeve="thematic",
+                        representative=representative,
+                        passed=False,
+                        reason="ETF已在其他仓位持有",
+                    )
+                )
+                continue
+            report = _direction_gate_report(
                 signal=signal,
                 candidate=candidate,
                 point=point,
                 sleeve="thematic",
+                representative=representative,
+                passed=True,
+                reason="同方向成交额最大ETF",
             )
             performance_score = _market_performance_score(point)
             fit_score = float((report.get("components") or {}).get("fit") or 0.0)
@@ -620,6 +754,7 @@ def allocation_plan(
         sleeves["thematic"],
         price_map,
         {row["code"] for row in [*rows, *mainline_rows]},
+        {str(row.get("theme") or "") for row in mainline_rows if row.get("theme")},
     )
     rows.extend(mainline_rows)
     rows.extend(thematic_rows)
