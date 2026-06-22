@@ -152,7 +152,7 @@ def sleeve_targets_from_market(market_payload: dict[str, Any]) -> dict[str, floa
     elif score_value >= 40:
         core_share, mainline_share, thematic_share = 0.50, 0.4167, 0.0833
     else:
-        core_share, mainline_share, thematic_share = 0.65, 0.35, 0.0
+        core_share, mainline_share, thematic_share = 0.60, 0.35, 0.05
 
     thematic_cap = parse_percent_range((record.get("sleeve_mix") or {}).get("thematic"))
     core = active_ratio * core_share
@@ -207,6 +207,22 @@ def _signal_candidates(signal: dict[str, Any]) -> list[dict[str, str]]:
 def _first_candidate(signal: dict[str, Any]) -> dict[str, str] | None:
     candidates = _signal_candidates(signal)
     return candidates[0] if candidates else None
+
+
+def _return_component(value: float | None, low: float, high: float) -> float:
+    if value is None:
+        return 45.0
+    return clamp(((value - low) / (high - low)) * 100.0, 0.0, 100.0)
+
+
+def _market_performance_score(point: PricePoint | None) -> float:
+    if point is None:
+        return 0.0
+    r20 = _return_component(point.r20, -10.0, 25.0)
+    r5 = _return_component(point.r5, -5.0, 15.0)
+    r1 = _return_component(point.pct_chg, -3.0, 6.0)
+    source = point.source_score if point.source_score is not None else 50.0
+    return clamp(r20 * 0.40 + r5 * 0.35 + r1 * 0.15 + source * 0.10, 0.0, 100.0)
 
 
 def legacy_core_price_point_from_etfs(
@@ -305,13 +321,20 @@ def _thematic_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
     candidates = []
     for signal in signals:
         stage = str(signal.get("stage") or "")
-        if "观察" not in stage:
-            continue
         try:
             evidence_score = float(signal.get("evidence_score") or 0.0)
         except (TypeError, ValueError):
             evidence_score = 0.0
-        if evidence_score < 70:
+
+        is_mainline_extension = (
+            "主线确认" in stage or "次主线" in stage or "强修复" in stage
+        )
+        is_observation_breakout = "观察" in stage
+        if not is_mainline_extension and not is_observation_breakout:
+            continue
+        if is_observation_breakout and evidence_score < 70:
+            continue
+        if is_mainline_extension and evidence_score < 75:
             continue
         if _first_candidate(signal) is None:
             continue
@@ -322,7 +345,7 @@ def _thematic_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
             -float(item.get("evidence_score") or 0.0),
             int(item.get("rank") or 999),
         ),
-    )[:1]
+    )[:8]
 
 
 def _distribute_budget(
@@ -400,6 +423,148 @@ def _distribute_budget(
     return rows, unused, gate_reports
 
 
+def _distribute_thematic_budget(
+    signals: list[dict[str, Any]],
+    budget: float,
+    price_map: dict[str, PricePoint],
+    excluded_codes: set[str],
+) -> tuple[list[dict[str, Any]], float, list[dict[str, Any]]]:
+    if budget <= 0 or not signals:
+        return [], budget, []
+
+    reviewed: list[dict[str, Any]] = []
+    for signal in signals:
+        for candidate in _signal_candidates(signal):
+            code = candidate["code"]
+            if code in excluded_codes:
+                continue
+            point = price_map.get(code)
+            report = evaluate_etf_gate(
+                signal=signal,
+                candidate=candidate,
+                point=point,
+                sleeve="thematic",
+            )
+            performance_score = _market_performance_score(point)
+            fit_score = float((report.get("components") or {}).get("fit") or 0.0)
+            priority_score = (
+                performance_score * 0.55
+                + float(report.get("score") or 0.0) * 0.30
+                + fit_score * 0.15
+            )
+            report["market_performance_score"] = round(performance_score, 2)
+            report["thematic_priority_score"] = round(priority_score, 2)
+            report["candidate_budget_ratio"] = 0.0
+            report["executed_weight_ratio"] = 0.0
+            report["selected"] = False
+            reviewed.append(report)
+
+    eligible = [
+        row
+        for row in reviewed
+        if float(row.get("execution_ratio") or 0.0) > 0.0
+        and float(row.get("market_performance_score") or 0.0) >= 50.0
+    ]
+    if not eligible:
+        for row in reviewed:
+            if float(row.get("execution_ratio") or 0.0) > 0.0:
+                row["reasons"] = [
+                    *row.get("reasons", []),
+                    "市场表现未达到主题仓位要求",
+                ]
+        return [], budget, reviewed
+
+    max_rows = 2 if budget >= 5.0 else 1
+    ordered_eligible = sorted(
+        eligible,
+        key=lambda row: (
+            -float(row.get("thematic_priority_score") or 0.0),
+            -float(row.get("market_performance_score") or 0.0),
+            int(next(
+                (
+                    signal.get("rank") or 999
+                    for signal in signals
+                    if signal.get("theme") == row.get("theme")
+                ),
+                999,
+            )),
+            str(row.get("code") or ""),
+        ),
+    )
+    selected: list[dict[str, Any]] = []
+    selected_code_set: set[str] = set()
+    for row in ordered_eligible:
+        code = str(row.get("code") or "")
+        if code in selected_code_set:
+            continue
+        selected.append(row)
+        selected_code_set.add(code)
+        if len(selected) >= max_rows:
+            break
+    selected_reports = {id(row) for row in selected}
+    priority_total = sum(float(row.get("thematic_priority_score") or 0.0) for row in selected)
+    if priority_total <= 0:
+        priority_total = float(len(selected))
+
+    rows: list[dict[str, Any]] = []
+    unused = 0.0
+    for report in reviewed:
+        if id(report) not in selected_reports:
+            if float(report.get("execution_ratio") or 0.0) > 0.0:
+                report["reasons"] = [
+                    *report.get("reasons", []),
+                    "主题表现排序未入选",
+                ]
+            continue
+        target_weight = budget * float(report.get("thematic_priority_score") or 1.0) / priority_total
+        executed_weight = target_weight * float(report.get("execution_ratio") or 0.0)
+        report["candidate_budget_ratio"] = target_weight
+        report["executed_weight_ratio"] = executed_weight
+        report["selected"] = executed_weight >= 1.0
+        unused += max(0.0, target_weight - executed_weight)
+        if executed_weight < 1.0:
+            continue
+
+        point = price_map.get(report["code"])
+        rows.append(
+            _priced_row(
+                code=report["code"],
+                name=report["name"],
+                sleeve="thematic",
+                theme=report.get("theme") or "",
+                stage=report.get("stage") or "",
+                target_weight_ratio=executed_weight,
+                evidence_score=None,
+                point=point,
+                source_note="theme_signal.market_performance",
+            )
+        )
+        rows[-1].update(
+            {
+                "pre_gate_weight_ratio": target_weight,
+                "etf_gate_grade": report["grade"],
+                "etf_gate_score": report["score"],
+                "etf_gate_pass": report["execution_ratio"] > 0,
+                "etf_execution_ratio": report["execution_ratio"],
+                "etf_gate_reasons": [
+                    *report.get("reasons", []),
+                    "主题仓位按市场表现优先",
+                ],
+                "etf_gate_reject_reasons": report["reject_reasons"],
+                "etf_gate_data_gaps": report["data_gaps"],
+                "etf_gate_components": {
+                    **(report.get("components") or {}),
+                    "market_performance": report.get("market_performance_score"),
+                    "thematic_priority": report.get("thematic_priority_score"),
+                },
+            }
+        )
+
+    used = sum(float(row["target_weight_ratio"]) for row in rows)
+    unused += max(0.0, budget - used - unused)
+    return rows, unused, reviewed
+
+
 def _gate_summary(gate_reports: list[dict[str, Any]]) -> dict[str, Any]:
     selected = [row for row in gate_reports if row.get("selected")]
     rejected = [row for row in gate_reports if row.get("execution_ratio") == 0.0]
@@ -450,8 +615,11 @@ def allocation_plan(
     mainline_rows, _mainline_unused, mainline_gate = _distribute_budget(
         _mainline_signals(signals), sleeves["mainline"], price_map, "mainline"
     )
-    thematic_rows, _thematic_unused, thematic_gate = _distribute_budget(
-        _thematic_signals(signals), sleeves["thematic"], price_map, "thematic"
+    thematic_rows, _thematic_unused, thematic_gate = _distribute_thematic_budget(
+        _thematic_signals(signals),
+        sleeves["thematic"],
+        price_map,
+        {row["code"] for row in [*rows, *mainline_rows]},
     )
     rows.extend(mainline_rows)
     rows.extend(thematic_rows)

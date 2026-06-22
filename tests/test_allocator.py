@@ -144,11 +144,11 @@ def test_target_allocations_use_four_sleeves() -> None:
         "515050.SH": PricePoint(
             code="515050.SH",
             close=1.0,
-            pct_chg=1.0,
+            pct_chg=2.0,
             source="test",
             amount=300_000,
-            r5=4.0,
-            r20=8.0,
+            r5=8.0,
+            r20=15.0,
             amount_rank=0.85,
             premium_rate=0.2,
         ),
@@ -181,6 +181,122 @@ def test_target_allocations_use_four_sleeves() -> None:
     assert all(row["is_synthetic"] is False for row in rows)
     assert rows[3]["etf_gate_grade"] == "A"
     assert rows[3]["etf_execution_ratio"] == 1.0
+
+
+def test_thematic_prefers_unheld_strong_market_performance() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "35%-45%",
+                    "market_position_score": 46.98,
+                }
+            }
+        }
+    }
+    theme_payload = {
+        "theme_signals": [
+            {
+                "rank": 1,
+                "theme": "硬科技电子/半导体",
+                "stage": "主线确认",
+                "score_weight_ratio": 90,
+                "evidence_score": 90,
+                "top_etf": "588170.SH 半导体ETF",
+            },
+            {
+                "rank": 2,
+                "theme": "AI算力/通信",
+                "stage": "主线确认",
+                "score_weight_ratio": 85,
+                "evidence_score": 85,
+                "top_etf": "515050.SH 5GETF",
+            },
+            {
+                "rank": 3,
+                "theme": "机器人",
+                "stage": "主线确认",
+                "score_weight_ratio": 80,
+                "evidence_score": 80,
+                "top_etf": "562500.SH 机器人ETF",
+            },
+            {
+                "rank": 4,
+                "theme": "工业母机",
+                "stage": "主线确认",
+                "score_weight_ratio": 92,
+                "evidence_score": 92,
+                "top_etf": "159663.SZ 机床ETF",
+            },
+            {
+                "rank": 5,
+                "theme": "消费观察",
+                "stage": "观察线",
+                "score_weight_ratio": 95,
+                "evidence_score": 95,
+                "top_etf": "512690.SH 消费ETF",
+            },
+        ]
+    }
+    price_map = {
+        "588170.SH": PricePoint("588170.SH", 1.0, 1.0, "test", amount=500_000, r5=5.0, r20=9.0, premium_rate=0.1),
+        "515050.SH": PricePoint("515050.SH", 1.0, 1.0, "test", amount=500_000, r5=4.0, r20=8.0, premium_rate=0.1),
+        "562500.SH": PricePoint("562500.SH", 1.0, 1.0, "test", amount=500_000, r5=3.0, r20=7.0, premium_rate=0.1),
+        "159663.SZ": PricePoint("159663.SZ", 1.0, 2.0, "test", amount=500_000, r5=12.0, r20=20.0, premium_rate=0.1),
+        "512690.SH": PricePoint("512690.SH", 1.0, -1.0, "test", amount=500_000, r5=-2.0, r20=-4.0, premium_rate=0.1),
+    }
+
+    plan = allocation_plan(market_payload, theme_payload, price_map)
+    thematic_rows = [row for row in plan["targets"] if row["sleeve"] == "thematic"]
+
+    assert [row["code"] for row in thematic_rows] == ["159663.SZ"]
+    assert round(thematic_rows[0]["target_weight_ratio"], 4) == 2.9988
+    assert "主题仓位按市场表现优先" in thematic_rows[0]["etf_gate_reasons"]
+
+
+def test_weak_market_keeps_small_thematic_performance_budget() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "35%-45%",
+                    "market_position_score": 35.0,
+                }
+            }
+        }
+    }
+    theme_payload = {
+        "theme_signals": [
+            {
+                "rank": 1,
+                "theme": "硬科技电子/半导体",
+                "stage": "主线确认",
+                "score_weight_ratio": 90,
+                "evidence_score": 90,
+                "top_etf": "588170.SH 半导体ETF",
+            },
+            {
+                "rank": 2,
+                "theme": "AI算力/通信",
+                "stage": "观察线",
+                "score_weight_ratio": 85,
+                "evidence_score": 85,
+                "top_etf": "515050.SH 5GETF",
+            },
+        ]
+    }
+    price_map = {
+        "588170.SH": PricePoint("588170.SH", 1.0, 1.0, "test", amount=500_000, r5=5.0, r20=9.0, premium_rate=0.1),
+        "515050.SH": PricePoint("515050.SH", 1.0, 2.0, "test", amount=500_000, r5=8.0, r20=15.0, premium_rate=0.1),
+    }
+
+    plan = allocation_plan(market_payload, theme_payload, price_map)
+    summary = sleeve_summary(plan["targets"])
+
+    assert round(summary["core"], 4) == 18.0
+    assert round(summary["mainline"], 4) == 10.5
+    assert round(summary["thematic"], 4) == 1.5
+    assert round(plan["risk_budget_ratio"], 4) == 30.0
 
 
 def test_etf_gate_moves_missing_data_to_defensive() -> None:
