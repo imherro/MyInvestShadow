@@ -59,7 +59,7 @@ def test_normalize_theme_api_latest_shape() -> None:
     assert result["market_context"]["broad_indexes"][0]["code"] == "000300.SH"
 
 
-def test_risk_budget_discounts_medium_market_range() -> None:
+def test_risk_budget_uses_single_position_sizer() -> None:
     market_payload = {
         "results": {
             "market_score": {
@@ -71,7 +71,7 @@ def test_risk_budget_discounts_medium_market_range() -> None:
         }
     }
 
-    assert risk_budget_from_market(market_payload) == 36.0
+    assert risk_budget_from_market(market_payload) == 30.0
 
 
 def test_target_allocations_use_four_sleeves() -> None:
@@ -157,14 +157,14 @@ def test_target_allocations_use_four_sleeves() -> None:
     budget, rows = target_allocations(market_payload, theme_payload, price_map)
     summary = sleeve_summary(rows)
 
-    assert round(budget, 2) == 36.0
+    assert round(budget, 2) == 30.0
     assert round(sum(row["target_weight_ratio"] for row in rows), 6) == 100.0
     rounded_summary = {key: round(value, 4) for key, value in summary.items()}
     assert rounded_summary == {
-        "core": 18.0,
-        "mainline": 15.0012,
-        "thematic": 2.9988,
-        "defensive": 64.0,
+        "core": 15.0,
+        "mainline": 12.501,
+        "thematic": 2.499,
+        "defensive": 70.0,
     }
     assert [row["code"] for row in rows] == [
         "510300.SH",
@@ -175,7 +175,7 @@ def test_target_allocations_use_four_sleeves() -> None:
         DEFENSIVE_ETF["code"],
     ]
     assert rows[0]["name"] == "华泰柏瑞沪深300ETF"
-    assert round(rows[0]["target_weight_ratio"], 4) == 10.8
+    assert round(rows[0]["target_weight_ratio"], 4) == 9.0
     assert rows[-1]["name"] == "银华货币ETF-A"
     assert all(row["instrument_type"] == "etf" for row in rows)
     assert all(row["is_synthetic"] is False for row in rows)
@@ -250,7 +250,7 @@ def test_thematic_prefers_unheld_strong_market_performance() -> None:
     thematic_rows = [row for row in plan["targets"] if row["sleeve"] == "thematic"]
 
     assert [row["code"] for row in thematic_rows] == ["159663.SZ"]
-    assert round(thematic_rows[0]["target_weight_ratio"], 4) == 2.9988
+    assert round(thematic_rows[0]["target_weight_ratio"], 4) == 2.499
     assert "主题仓位按市场表现优先" in thematic_rows[0]["etf_gate_reasons"]
 
 
@@ -461,7 +461,7 @@ def test_gate_keeps_observation_direction_as_watch_backup() -> None:
     assert "观察线保留备选" in gate_rows["消费观察"]["reasons"]
 
 
-def test_weak_market_keeps_small_thematic_performance_budget() -> None:
+def test_weak_market_drops_sub_one_percent_thematic_to_defensive() -> None:
     market_payload = {
         "results": {
             "market_score": {
@@ -500,10 +500,10 @@ def test_weak_market_keeps_small_thematic_performance_budget() -> None:
     plan = allocation_plan(market_payload, theme_payload, price_map)
     summary = sleeve_summary(plan["targets"])
 
-    assert round(summary["core"], 4) == 18.0
-    assert round(summary["mainline"], 4) == 10.5
-    assert round(summary["thematic"], 4) == 1.5
-    assert round(plan["risk_budget_ratio"], 4) == 30.0
+    assert round(summary["core"], 4) == 9.0
+    assert round(summary["mainline"], 4) == 5.25
+    assert round(summary["thematic"], 4) == 0.0
+    assert round(plan["risk_budget_ratio"], 4) == 14.25
 
 
 def test_etf_gate_moves_missing_data_to_defensive() -> None:
@@ -532,10 +532,10 @@ def test_etf_gate_moves_missing_data_to_defensive() -> None:
     plan = allocation_plan(market_payload, theme_payload, {})
     summary = sleeve_summary(plan["targets"])
 
-    assert round(plan["market_risk_budget_ratio"], 2) == 36.0
-    assert round(plan["risk_budget_ratio"], 2) == 18.0
+    assert round(plan["market_risk_budget_ratio"], 2) == 30.0
+    assert round(plan["risk_budget_ratio"], 2) == 15.0
     assert summary["mainline"] == 0.0
-    assert summary["defensive"] == 82.0
+    assert summary["defensive"] == 85.0
     assert {row["code"] for row in plan["targets"] if row["sleeve"] == "defensive"} == {
         DEFENSIVE_ETF["code"]
     }
@@ -583,8 +583,8 @@ def test_etf_gate_discounts_overheated_candidate() -> None:
 
     assert plan["etf_gate"][0]["grade"] == "C"
     assert plan["etf_gate"][0]["execution_ratio"] == 0.45
-    assert round(rows["588170.SH"]["target_weight_ratio"], 4) == 6.7505
-    assert round(rows[DEFENSIVE_ETF["code"]]["target_weight_ratio"], 4) == 75.2495
+    assert round(rows["588170.SH"]["target_weight_ratio"], 4) == 5.6255
+    assert round(rows[DEFENSIVE_ETF["code"]]["target_weight_ratio"], 4) == 79.3745
 
 
 def test_legacy_core_return_uses_core_etf_basket() -> None:

@@ -66,21 +66,32 @@ http://127.0.0.1:8013
 
 ## 主动仓位预算
 
-市场接口中的 `equity_position_range` 和 `market_position_score` 决定主动仓位上限。
+市场接口中的 `market_position_score`、`confidence` 和 `market_regime` 决定主动仓位上限。总仓位计算集中在 `portfolio/position_sizer.py` 的 `compute_target_position`，这是仓位大小的唯一确定性入口；`allocator.py` 只负责把该仓位拆成核心、主线、主题和防御结构。
 
 计算规则：
 
-- 如果有 `equity_position_range`，取区间中位数作为基础仓位。
-- 如果没有区间，则按市场分数兜底：
-  - 分数 `>= 70`：基础仓位 60%
-  - 分数 `>= 55`：基础仓位 45%
-  - 分数 `>= 40`：基础仓位 35%
-  - 分数 `< 40`：基础仓位 20%
-- 分数 `>= 70`：使用 100% 基础仓位
-- 分数 `>= 55`：使用 95% 基础仓位
-- 分数 `>= 40`：使用 90% 基础仓位
-- 分数 `< 40`：使用 75% 基础仓位
-- 如果市场结果 `confidence=low`，主动仓位再乘以 90%
+- 分数 `>= 70`：基础仓位 60%
+- 分数 `>= 55`：基础仓位 45%
+- 分数 `>= 40`：基础仓位 30%
+- 分数 `< 40`：基础仓位 15%
+- `confidence` 归一化到 `0.0-1.0` 后，只做轻微调整：`0.85 + 0.15 * confidence`
+- `regime=risk_on`：最终仓位加 10%
+- `regime=neutral` 或缺失：不调整
+- `regime=risk_off`：最终仓位减 10%
+- 最终仓位被限制在 `5%-80%`
+
+该函数返回可解释结构：
+
+```python
+{
+    "final_position": 0.30,
+    "components": {
+        "base": 0.30,
+        "confidence_adj": 1.0,
+        "regime_adj": 0.0,
+    },
+}
+```
 
 主动仓位再拆成核心、主线、主题：
 
@@ -261,8 +272,10 @@ data/shadow_account.sqlite
 ## 文件结构
 
 ```text
+portfolio/
+  position_sizer.py 总仓位计算唯一入口，输出 final_position 和 components
 shadow_app/
-  allocator.py      仓位预算、主线/主题选择、ETF 去重和目标仓位生成
+  allocator.py      仓位结构拆分、主线/主题选择、ETF 去重和目标仓位生成
   etf_gate.py       ETF 评分/估值门禁
   pricing.py        Tushare 价格、净值溢价和主线接口回退价格
   service.py        调仓运行、数据库写入、净值和 API 状态组装
@@ -276,6 +289,7 @@ static/
 templates/
   index.html        首页模板
 tests/
+  test_position_sizer.py 总仓位函数边界、confidence、regime 和确定性测试
   test_allocator.py  仓位和门禁规则测试
   test_service.py    上游严格校验和正式运行保护测试
   test_main_api.py   写入口保护和并发拒绝测试
@@ -291,6 +305,7 @@ python -m pytest -q
 当前测试覆盖重点：
 
 - 主线/主题仓位拆分
+- 总仓位函数的 score 边界、confidence 调整、regime 调整和确定性
 - 同方向只保留成交额最大 ETF
 - 主题仓位偏重市场表现
 - ETF 门禁 A/B/C/D 折扣和拒绝
@@ -306,6 +321,7 @@ python -m pytest -q
 建议审计时重点看：
 
 - 是否真的没有读取真实持仓或输出真实交易指令。
+- 总仓位是否只通过 `compute_target_position` 生成，并输出可解释 components。
 - `run_daily_rebalance` 是否在上游失败或基准日不一致时停止生成正式仓位。
 - 主线仓位和主题仓位是否会选择重复方向。
 - ETF 门禁是否会因为数据缺失而误判为通过。
@@ -319,6 +335,7 @@ python -m pytest -q
 
 - `README.md`
 - `requirements.txt`
+- `portfolio/`
 - `shadow_app/`
 - `static/`
 - `templates/`

@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from portfolio.position_sizer import compute_target_position
+
 from .etf_gate import evaluate_etf_gate
 from .pricing import PricePoint
 
@@ -61,20 +63,6 @@ def parse_percent_range(value: str | None) -> float | None:
     return clamp(sum(numbers[:2]) / 2, 0.0, 100.0)
 
 
-def parse_percent_bounds(value: str | None) -> tuple[float, float] | None:
-    if not value:
-        return None
-    numbers = [float(item) for item in re.findall(r"\d+(?:\.\d+)?", value)]
-    if not numbers:
-        return None
-    if len(numbers) == 1:
-        number = clamp(numbers[0], 0.0, 100.0)
-        return number, number
-    low = clamp(min(numbers[:2]), 0.0, 100.0)
-    high = clamp(max(numbers[:2]), 0.0, 100.0)
-    return low, high
-
-
 def extract_etf_candidates(text: str | None) -> list[dict[str, str]]:
     if not text:
         return []
@@ -97,53 +85,77 @@ def market_record(market_payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def risk_budget_from_market(market_payload: dict[str, Any]) -> float:
-    record = market_record(market_payload)
-    bounds = parse_percent_bounds(record.get("equity_position_range"))
-    if bounds is not None:
-        low, high = bounds
-        midpoint = (low + high) / 2
-    else:
-        midpoint = None
-    score = record.get("market_position_score")
+def _market_score_value(record: dict[str, Any]) -> float:
     try:
-        score_value = float(score)
+        return float(record.get("market_position_score"))
     except (TypeError, ValueError):
-        score_value = 45.0
+        return 45.0
 
-    if midpoint is None:
-        if score_value >= 70:
-            midpoint = 60.0
-        elif score_value >= 55:
-            midpoint = 45.0
-        elif score_value >= 40:
-            midpoint = 35.0
-        else:
-            midpoint = 20.0
 
-    if score_value >= 70:
-        active_ratio = midpoint
-    elif score_value >= 55:
-        active_ratio = midpoint * 0.95
-    elif score_value >= 40:
-        active_ratio = midpoint * 0.90
-    else:
-        active_ratio = midpoint * 0.75
+def _confidence_value(record: dict[str, Any]) -> float:
+    raw = record.get("confidence")
+    if raw is None or raw == "":
+        return 1.0
+    try:
+        number = float(raw)
+        if number > 1.0:
+            number /= 100.0
+        return clamp(number, 0.0, 1.0)
+    except (TypeError, ValueError):
+        label = str(raw).strip().lower()
+    return {
+        "high": 1.0,
+        "medium": 0.70,
+        "mid": 0.70,
+        "normal": 0.70,
+        "low": 0.35,
+    }.get(label, 1.0)
 
-    confidence = str(record.get("confidence") or "").lower()
-    if confidence == "low":
-        active_ratio *= 0.90
 
-    return clamp(active_ratio, 0.0, 100.0)
+def _regime_value(record: dict[str, Any]) -> str | None:
+    raw = record.get("risk_regime") or record.get("regime") or record.get("market_regime")
+    if raw is None:
+        return None
+    value = str(raw).strip().lower()
+    if value in {"risk_on", "risk-on", "risk on"}:
+        return "risk_on"
+    if value in {"risk_off", "risk-off", "risk off"}:
+        return "risk_off"
+    if value in {"neutral", "中性"}:
+        return "neutral"
+    if any(token in value for token in ("进攻", "强势", "上行", "riskon")):
+        return "risk_on"
+    if any(token in value for token in ("防御", "弱势", "退潮", "riskoff")):
+        return "risk_off"
+    return "neutral"
+
+
+def _position_sizing_from_market(market_payload: dict[str, Any]) -> dict[str, Any]:
+    record = market_record(market_payload)
+    score_value = _market_score_value(record)
+    confidence = _confidence_value(record)
+    regime = _regime_value(record)
+    sizing = compute_target_position(score_value, confidence, regime)
+    return {
+        **sizing,
+        "inputs": {
+            "market_score": score_value,
+            "confidence": confidence,
+            "regime": regime,
+        },
+    }
+
+
+def risk_budget_from_market(market_payload: dict[str, Any]) -> float:
+    sizing = _position_sizing_from_market(market_payload)
+    return float(sizing["final_position"]) * 100.0
 
 
 def sleeve_targets_from_market(market_payload: dict[str, Any]) -> dict[str, float]:
-    active_ratio = risk_budget_from_market(market_payload)
+    sizing = _position_sizing_from_market(market_payload)
+    active_ratio = float(sizing["final_position"]) * 100.0
     record = market_record(market_payload)
-    try:
-        score_value = float(record.get("market_position_score"))
-    except (TypeError, ValueError):
-        score_value = 45.0
+    score_value = _market_score_value(record)
 
     if score_value >= 70:
         core_share, mainline_share, thematic_share = 0.40, 0.45, 0.15
@@ -806,6 +818,7 @@ def allocation_plan(
     price_map: dict[str, PricePoint] | None = None,
 ) -> dict[str, Any]:
     price_map = price_map or {}
+    position_sizing = _position_sizing_from_market(market_payload)
     sleeves = sleeve_targets_from_market(market_payload)
     signals = theme_payload.get("theme_signals") or []
 
@@ -855,6 +868,7 @@ def allocation_plan(
     return {
         "market_risk_budget_ratio": sum(float(sleeves[key]) for key in ("core", "mainline", "thematic")),
         "risk_budget_ratio": used_non_defensive,
+        "position_sizing": position_sizing,
         "sleeve_targets_before_gate": sleeves,
         "targets": sorted_rows,
         "etf_gate": gate_reports,

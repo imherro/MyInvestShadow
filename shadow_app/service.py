@@ -256,10 +256,12 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
             "equity_position_range": record.get("equity_position_range"),
             "sleeve_summary": summary,
             "market_risk_budget_ratio": plan["market_risk_budget_ratio"],
+            "position_sizing": plan["position_sizing"],
             "sleeve_targets_before_gate": plan["sleeve_targets_before_gate"],
             "executed_active_weight_ratio": risk_budget,
             "decision_trace": {
                 "market_risk_budget_ratio": plan["market_risk_budget_ratio"],
+                "position_sizing": plan["position_sizing"],
                 "sleeve_targets_before_gate": plan["sleeve_targets_before_gate"],
                 "etf_gate_summary": plan["etf_gate_summary"],
                 "etf_gate": plan["etf_gate"],
