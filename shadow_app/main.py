@@ -156,7 +156,10 @@ async def api_run_daily(x_shadow_token: str | None = Header(default=None)) -> di
     if _refresh_lock.locked():
         raise HTTPException(status_code=409, detail="影子仓位刷新正在运行")
     async with _refresh_lock:
-        return await asyncio.to_thread(run_daily_rebalance, reason="manual_api")
+        try:
+            return await asyncio.to_thread(run_daily_rebalance, reason="manual_api")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/nav")
