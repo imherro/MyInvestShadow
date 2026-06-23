@@ -343,6 +343,16 @@ main {
   font-weight: 600;
 }
 
+.code-link {
+  color: #0b625b;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.code-link:hover {
+  text-decoration: underline;
+}
+
 .reason-cell {
   max-width: 360px;
   white-space: normal;

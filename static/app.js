@@ -50,6 +50,18 @@ const signClass = (value) => {
 };
 
 const instrumentCode = (row) => row.display_code || row.code || "--";
+const xueqiuUrl = (code) => {
+  const match = String(code || "").match(/^(\d{6})\.(SH|SZ|BJ)$/i);
+  if (!match) return null;
+  return `https://xueqiu.com/S/${match[2].toUpperCase()}${match[1]}`;
+};
+const instrumentCodeLink = (row) => {
+  const label = instrumentCode(row);
+  const url = xueqiuUrl(row.code);
+  const text = escapeHtml(label);
+  if (!url) return text;
+  return `<a class="code-link" href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+};
 const instrumentBadge = (row) => row.is_synthetic
   ? `<span class="synthetic-badge">内部</span>`
   : "";
@@ -180,7 +192,7 @@ function renderAllocations(rows) {
     ].filter(Boolean).join(" ");
     return `
       <tr class="${rowClasses}">
-        <td>${escapeHtml(instrumentCode(row))}${instrumentBadge(row)}</td>
+        <td>${instrumentCodeLink(row)}${instrumentBadge(row)}</td>
         <td>${escapeHtml(row.name || row.code)}</td>
         <td>${sleeveLabels[row.sleeve] || row.sleeve || "--"}</td>
         <td class="theme-cell">${escapeHtml(row.theme || "")}<br><span>${escapeHtml(row.stage || "")}</span></td>
@@ -221,7 +233,7 @@ function renderRebalanceHistory(history) {
       <tr>
         <td>${escapeHtml(row.basis_date || "--")}<br><span>${escapeHtml(row.previous_basis_date || "--")}</span></td>
         <td class="${actionClass[action] || ""}">${escapeHtml(row.action_label || action || "--")}</td>
-        <td>${escapeHtml(instrumentCode(row))}${instrumentBadge(row)}</td>
+        <td>${instrumentCodeLink(row)}${instrumentBadge(row)}</td>
         <td>${escapeHtml(row.name || row.code)}</td>
         <td>${sleeveLabels[row.sleeve] || row.sleeve || "--"}</td>
         <td>${fmtPct(row.previous_weight_ratio, 2)}</td>
@@ -294,7 +306,7 @@ function renderEtfGate(summary, rows) {
     const factor = gateFactor(row);
     return `
       <tr class="${row.selected ? "selected-row" : ""}">
-        <td>${escapeHtml(instrumentCode(row))}${instrumentBadge(row)}</td>
+        <td>${instrumentCodeLink(row)}${instrumentBadge(row)}</td>
         <td>${escapeHtml(row.name || row.code)}</td>
         <td>${sleeveLabels[row.sleeve] || row.sleeve || "--"}</td>
         <td><span class="grade-pill grade-${String(row.grade || "").toLowerCase()}">${escapeHtml(row.grade || "--")}</span></td>
