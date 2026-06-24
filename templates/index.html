@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MyInvestShadow</title>
-    <link rel="stylesheet" href="/static/app.css?v=20260623-xueqiu" />
+    <link rel="stylesheet" href="/static/app.css?v=20260624-principles2" />
   </head>
   <body>
     <header class="topbar">
@@ -78,7 +78,19 @@
 
       <section class="panel">
         <div class="section-head">
-          <h2>影子目标仓位</h2>
+          <h2 class="heading-with-help">
+            影子目标仓位
+            <span class="help-popover" tabindex="0" aria-label="建仓调仓原则">
+              <span class="help-icon" aria-hidden="true">i</span>
+              <span class="help-panel" role="tooltip">
+                <strong>建仓调仓原则</strong>
+                <span>市场研究先定总主动仓位；主线研究只决定方向，不考虑真实持仓。</span>
+                <span>资金阶段决定工具：β主导期 ETF 优先，α收敛期龙头优先，情绪博弈期小仓或空仓，退潮期回防御。</span>
+                <span>仓位分为核心、主线、主题、防御；同方向不重复落地，未过门禁或数据不足的预算归防御。</span>
+                <span>每天收盘后只在上游基准日一致，且阶段、门禁或目标权重有实质变化时调仓并记录历史。</span>
+              </span>
+            </span>
+          </h2>
           <span id="allocationCount">--</span>
         </div>
         <div class="table-wrap">
@@ -135,7 +147,7 @@
     </main>
 
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/app.js?v=20260623-xueqiu"></script>
+    <script src="/static/app.js?v=20260624-principles2"></script>
     <script src="https://invest.okbbc.com/footer.js" defer></script>
   </body>
 </html>

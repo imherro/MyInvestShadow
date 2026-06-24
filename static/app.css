@@ -59,6 +59,80 @@ h2 {
   font-weight: 700;
 }
 
+.heading-with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.help-popover {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  color: #0b625b;
+  outline: none;
+}
+
+.help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #9ccfc8;
+  border-radius: 50%;
+  background: #f1faf8;
+  color: #0b625b;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.help-panel {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  z-index: 30;
+  display: none;
+  width: min(460px, calc(100vw - 48px));
+  padding: 12px 14px;
+  border: 1px solid #b8d8d4;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.16);
+  color: var(--text);
+  font-weight: 400;
+  transform: translateX(-28%);
+  white-space: normal;
+}
+
+.help-panel strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.help-panel span {
+  display: block;
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.help-panel span + span {
+  margin-top: 6px;
+}
+
+.help-popover:hover .help-panel,
+.help-popover:focus .help-panel,
+.help-popover:focus-within .help-panel {
+  display: block;
+}
+
 p,
 span,
 td,
@@ -156,6 +230,14 @@ main {
 
 .section-head span {
   color: var(--muted);
+}
+
+.section-head .help-icon {
+  color: #0b625b;
+}
+
+.section-head .help-panel span {
+  color: #344054;
 }
 
 .chart {
