@@ -244,7 +244,7 @@ function renderRebalanceHistory(history) {
   }).join("");
 }
 
-function renderSleeveSummary(summary) {
+function renderSleeveSummary(summary, defensiveLayers = []) {
   const entries = ["core", "mainline", "thematic", "defensive"];
   const compact = window.innerWidth <= 560;
   const minColumn = compact ? 52 : 78;
@@ -253,10 +253,14 @@ function renderSleeveSummary(summary) {
     .join(" ");
   const el = byId("sleeveSummary");
   el.style.gridTemplateColumns = columns;
+  const defensiveText = (defensiveLayers || [])
+    .map((row) => `${row.label}${fmtPct(row.weight_ratio || 0, 1)}`)
+    .join(" / ");
   el.innerHTML = entries.map((key) => `
-    <div class="sleeve-item sleeve-${key}" title="${sleeveLabels[key]} ${fmtPct(summary?.[key] || 0, 1)}">
+    <div class="sleeve-item sleeve-${key}" title="${sleeveLabels[key]} ${fmtPct(summary?.[key] || 0, 1)}${key === "defensive" && defensiveText ? `：${defensiveText}` : ""}">
       <span>${compact ? sleeveShortLabels[key] : sleeveLabels[key]}</span>
       <strong>${fmtPct(summary?.[key] || 0, 1)}</strong>
+      ${key === "defensive" && defensiveText ? `<small>${escapeHtml(defensiveText)}</small>` : ""}
     </div>
   `).join("");
 }
@@ -347,9 +351,19 @@ function renderAllocationPolicy(policy) {
   `;
 }
 
-function renderSources(rows) {
+function renderSources(rows, optionalPolicy = {}) {
   byId("statusText").textContent = rows.length ? "已连接上游" : "暂无快照";
-  byId("sourceStatus").innerHTML = rows.map((row) => `
+  const optionalStatus = Object.keys(optionalPolicy || {}).length ? `
+    <div class="status-item">
+      <strong>可选研究上游</strong>
+      <p>
+        ETF研究：${optionalPolicy.etf_used ? "已参与" : "未参与"}，基准日：${optionalPolicy.etf_basis_date || "--"}<br>
+        个股深研：${optionalPolicy.stock_used ? "已参与" : "未参与"}，基准日：${optionalPolicy.stock_basis_date || "--"}<br>
+        要求基准日：${optionalPolicy.required_basis_date || "--"}
+      </p>
+    </div>
+  ` : "";
+  byId("sourceStatus").innerHTML = optionalStatus + rows.map((row) => `
     <div class="status-item">
       <strong>${row.source} ${row.ok ? "正常" : "异常"}</strong>
       <p>基准日：${row.basis_date || "--"}<br>获取时间：${row.fetched_at || "--"}<br>${row.error || row.content_hash || ""}</p>
@@ -361,12 +375,12 @@ function render(data) {
   state.latest = data;
   renderMetrics(data);
   renderNavChart(data.nav_curve || []);
-  renderSleeveSummary(data.sleeve_summary || {});
+  renderSleeveSummary(data.sleeve_summary || {}, data.defensive_layers || []);
   renderEtfGate(data.etf_gate_summary || {}, data.etf_gate || []);
   renderAllocations(data.allocations || []);
   renderRebalanceHistory(data.rebalance_history || []);
   renderAllocationPolicy(data.allocation_policy || {});
-  renderSources(data.source_status || []);
+  renderSources(data.source_status || [], data.optional_source_policy || {});
 }
 
 async function loadState() {
@@ -391,7 +405,7 @@ async function runRefresh() {
 
 byId("refreshBtn").addEventListener("click", runRefresh);
 window.addEventListener("resize", () => {
-  if (state.latest) renderSleeveSummary(state.latest.sleeve_summary || {});
+  if (state.latest) renderSleeveSummary(state.latest.sleeve_summary || {}, state.latest.defensive_layers || []);
 });
 
 loadState().catch((error) => showToast(`加载失败：${error.message}`));

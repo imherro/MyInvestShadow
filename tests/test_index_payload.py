@@ -26,7 +26,21 @@ def test_build_index_payload_is_homepage_focused() -> None:
             "defensive": 64.0,
         },
         "nav_curve": [{"basis_date": "2026-06-17", "nav": 1.0123}],
-        "allocations": [{"code": "510300.SH", "target_weight_ratio": 10.8}],
+        "allocations": [
+            {"code": "510300.SH", "target_weight_ratio": 10.8},
+            {
+                "code": "512890.SH",
+                "sleeve": "defensive",
+                "target_weight_ratio": 20.0,
+                "etf_gate_components": {"defensive_layer": "quality"},
+            },
+            {
+                "code": "511880.SH",
+                "sleeve": "defensive",
+                "target_weight_ratio": 44.0,
+                "etf_gate_components": {},
+            },
+        ],
         "rebalance_history": [
             {
                 "basis_date": "2026-06-17",
@@ -34,6 +48,7 @@ def test_build_index_payload_is_homepage_focused() -> None:
             }
         ],
         "run_payload": {
+            "optional_source_policy": {"etf_used": True, "stock_used": False},
             "decision_trace": {
                 "etf_gate_summary": {"reviewed_count": 1, "selected_count": 1},
                 "etf_gate": [{"code": "588170.SH", "grade": "A"}],
@@ -41,7 +56,9 @@ def test_build_index_payload_is_homepage_focused() -> None:
                     "position_source": "market.sleeve_mix",
                     "range_violation": False,
                 },
-            }
+                "stock_gate": [{"code": "688999.SH", "selected": True}],
+                "defensive_quality_gate": [{"code": "512890.SH", "selected": True}],
+            },
         },
         "source_status": [{"source": "theme", "ok": 1}],
     }
@@ -56,6 +73,13 @@ def test_build_index_payload_is_homepage_focused() -> None:
         "weight_ratio": 18.0,
     }
     assert payload["allocations"][0]["code"] == "510300.SH"
+    assert payload["defensive_layers"] == [
+        {"key": "defensive_quality", "label": "收益防御", "weight_ratio": 20.0},
+        {"key": "cash_like", "label": "现金防御", "weight_ratio": 44.0},
+    ]
+    assert payload["optional_source_policy"]["etf_used"] is True
+    assert payload["stock_gate"][0]["selected"] is True
+    assert payload["defensive_quality_gate"][0]["code"] == "512890.SH"
     assert payload["etf_gate_summary"]["reviewed_count"] == 1
     assert payload["etf_gate"][0]["grade"] == "A"
     assert payload["allocation_policy"]["position_source"] == "market.sleeve_mix"

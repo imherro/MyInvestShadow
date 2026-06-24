@@ -291,6 +291,15 @@ main {
   white-space: nowrap;
 }
 
+.sleeve-item small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
+  white-space: normal;
+}
+
 .sleeve-core {
   border-left: 4px solid #2563eb;
 }
@@ -566,5 +575,9 @@ tbody tr:last-child td {
 
   .sleeve-item strong {
     font-size: 14px;
+  }
+
+  .sleeve-item small {
+    display: none;
   }
 }

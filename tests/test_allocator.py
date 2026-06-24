@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from shadow_app.allocator import (
     DEFENSIVE_ETF,
+    allocation_candidate_codes,
     allocation_plan,
     extract_etf_candidates,
     legacy_core_price_point_from_etfs,
@@ -57,6 +58,61 @@ def test_normalize_theme_api_latest_shape() -> None:
     assert result["theme_signals"][0]["etf_score"] is None
     assert result["theme_signals"][1]["score_weight_ratio"] == 0.0
     assert result["market_context"]["broad_indexes"][0]["code"] == "000300.SH"
+
+
+def test_mainline_ranking_uses_cycle_phase_and_etf_research_candidates() -> None:
+    payload = {
+        "report_id": "mainline_review_new",
+        "result": {
+            "basis_date": "2026-06-24",
+            "mainline_ranking": [
+                {
+                    "rank": 1,
+                    "theme_id": "hardtech_semiconductor",
+                    "theme_name": "硬科技电子/半导体",
+                    "cycle_stage": "policy_incubation",
+                    "cycle_stage_label": "政策孵化",
+                    "cycle_evidence_score": 78,
+                    "mainline_score_v6": 0.82,
+                }
+            ],
+            "theme_ranking": [
+                {
+                    "theme_id": "hardtech_semiconductor",
+                    "theme": "硬科技电子/半导体",
+                    "stage": "弱势/退潮",
+                    "top_etf": "159995.SZ 华夏国证半导体芯片ETF",
+                }
+            ],
+        },
+    }
+    etf_payload = {
+        "basis_date": "2026-06-24",
+        "key_results": {
+            "primary_output": {
+                "items": [
+                    {
+                        "code": "588200.SH",
+                        "name": "嘉实上证科创板芯片ETF",
+                        "theme": "半导体芯片",
+                        "deep_rating": "A",
+                        "deep_score": 86,
+                        "shadow_observation_eligible": True,
+                    }
+                ]
+            }
+        },
+    }
+
+    result = normalize_theme_payload(payload)
+    signal = result["theme_signals"][0]
+    codes = allocation_candidate_codes({}, result, etf_payload=etf_payload)
+
+    assert signal["stage"] == "观察线/政策孵化"
+    assert signal["instrument_preference"] == "etf"
+    assert signal["score_weight_ratio"] == 78
+    assert signal["top_etf"] == "159995.SZ 华夏国证半导体芯片ETF"
+    assert "588200.SH" in codes
 
 
 def test_risk_budget_respects_market_equity_range_floor() -> None:
@@ -651,6 +707,148 @@ def test_structure_guard_safe_mode_keeps_missing_data_budget_defensive() -> None
     assert plan["structure_guard_report"]["total_sum_check"] is True
 
 
+def test_defensive_sleeve_splits_quality_etf_and_cash_layers() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "market_position_score": 35.0,
+                    "sleeve_mix": {
+                        "core": "20%",
+                        "mainline": "0%",
+                        "thematic": "0%",
+                        "defensive": "80%",
+                    },
+                }
+            }
+        }
+    }
+    etf_payload = {
+        "basis_date": "2026-06-24",
+        "key_results": {
+            "primary_output": {
+                "items": [
+                    {
+                        "code": "512890.SH",
+                        "name": "华泰柏瑞中证红利低波动ETF",
+                        "valuation_model_type": "factor_defensive",
+                        "sleeve_key": "defensive_quality",
+                        "category_key": "红利低波",
+                        "deep_rating": "A",
+                        "deep_score": 88,
+                        "shadow_observation_eligible": True,
+                        "scores": {
+                            "liquidity_score": 80,
+                            "factor_premium_score": 82,
+                            "portfolio_role_score": 86,
+                            "tracking_score": 78,
+                        },
+                    },
+                    {
+                        "code": "159201.SZ",
+                        "name": "华夏国证自由现金流ETF",
+                        "valuation_model_type": "factor_defensive",
+                        "sleeve_key": "defensive_quality",
+                        "category_key": "自由现金流",
+                        "deep_rating": "A",
+                        "deep_score": 82,
+                        "shadow_observation_eligible": True,
+                        "scores": {
+                            "liquidity_score": 75,
+                            "factor_premium_score": 80,
+                            "portfolio_role_score": 82,
+                            "tracking_score": 76,
+                        },
+                    },
+                ]
+            }
+        },
+    }
+    price_map = {
+        "512890.SH": PricePoint("512890.SH", 1.0, 0.4, "test", amount=800_000, r5=1.0, r20=3.0, premium_rate=0.1),
+        "159201.SZ": PricePoint("159201.SZ", 1.0, 0.3, "test", amount=500_000, r5=0.5, r20=2.0, premium_rate=0.1),
+    }
+
+    plan = allocation_plan(market_payload, {"theme_signals": []}, price_map, etf_payload=etf_payload)
+    defensive_rows = [row for row in plan["targets"] if row["sleeve"] == "defensive"]
+    quality_rows = [
+        row
+        for row in defensive_rows
+        if (row.get("etf_gate_components") or {}).get("defensive_layer") == "quality"
+    ]
+    cash_row = [row for row in defensive_rows if row["code"] == DEFENSIVE_ETF["code"]][0]
+
+    assert {row["code"] for row in quality_rows} == {"512890.SH", "159201.SZ"}
+    assert round(sum(row["target_weight_ratio"] for row in quality_rows), 4) == 25.0
+    assert round(cash_row["target_weight_ratio"], 4) == 55.0
+    assert plan["gate_universe_audit"]["defensive_quality_selected_count"] == 2
+
+
+def test_stock_research_can_fill_small_thematic_leader_sleeve() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "market_position_score": 55.0,
+                    "sleeve_mix": {
+                        "core": "20%",
+                        "mainline": "0%",
+                        "thematic": "8%",
+                        "defensive": "72%",
+                    },
+                }
+            }
+        }
+    }
+    theme_payload = {
+        "theme_signals": [
+            {
+                "rank": 1,
+                "theme": "机器人",
+                "stage": "主线确认/资金收敛",
+                "instrument_preference": "leader",
+                "score_weight_ratio": 85,
+                "evidence_score": 88,
+                "top_etf": "",
+            }
+        ]
+    }
+    stock_payload = {
+        "basis_date": "2026-06-24",
+        "stocks": [
+            {
+                "leader": {
+                    "code": "688999.SH",
+                    "name": "机器人龙头",
+                    "theme": "机器人",
+                    "deep_rating": "A",
+                    "deep_score": 88,
+                    "shadow_observation_eligible": True,
+                    "scores": {
+                        "theme_binding": 90,
+                        "evidence_quality": 88,
+                        "trading_structure": 62,
+                        "financial_quality": 78,
+                        "valuation_safety": 65,
+                    },
+                    "market": {"turnover_rate": 4.8},
+                }
+            }
+        ],
+    }
+    price_map = {
+        "688999.SH": PricePoint("688999.SH", 30.0, 2.0, "test", amount=700_000, r5=6.0, r20=12.0),
+    }
+
+    plan = allocation_plan(market_payload, theme_payload, price_map, stock_payload=stock_payload)
+    stock_rows = [row for row in plan["targets"] if row.get("instrument_type") == "stock"]
+
+    assert [row["code"] for row in stock_rows] == ["688999.SH"]
+    assert stock_rows[0]["sleeve"] == "thematic"
+    assert stock_rows[0]["target_weight_ratio"] <= 6.0
+    assert plan["gate_universe_audit"]["stock_selected_count"] == 1
+
+
 def test_pre_gate_keeps_tradeable_overheated_candidate_without_discount() -> None:
     market_payload = {
         "results": {
@@ -689,8 +887,8 @@ def test_pre_gate_keeps_tradeable_overheated_candidate_without_discount() -> Non
     plan = allocation_plan(market_payload, theme_payload, price_map)
     rows = {row["code"]: row for row in plan["targets"]}
 
-    assert plan["etf_gate"][0]["grade"] == "C"
-    assert plan["etf_gate"][0]["pre_gate_execution_ratio"] == 0.45
+    assert plan["etf_gate"][0]["grade"] == "B"
+    assert plan["etf_gate"][0]["pre_gate_execution_ratio"] == 0.75
     assert plan["etf_gate"][0]["execution_ratio"] == 1.0
     assert round(rows["588170.SH"]["target_weight_ratio"], 4) == 17.5
     assert round(rows[DEFENSIVE_ETF["code"]]["target_weight_ratio"], 4) == 65.0

@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from .config import get_tushare_token
+from .etf_research import etf_research_price_fallback
 
 
 @dataclass(frozen=True)
@@ -152,6 +153,12 @@ def theme_price_fallback(theme_payload: dict[str, Any]) -> dict[str, PricePoint]
             r20_rank=_safe_float(row.get("r20_rank")),
         )
     return result
+
+
+def combined_price_fallback(
+    theme_payload: dict[str, Any], etf_payload: dict[str, Any] | None = None
+) -> dict[str, PricePoint]:
+    return theme_price_fallback(theme_payload) | etf_research_price_fallback(etf_payload)
 
 
 def _coalesce(*values: Any) -> Any:

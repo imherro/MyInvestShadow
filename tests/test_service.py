@@ -136,3 +136,77 @@ def test_run_daily_rebalance_rejects_mismatched_basis_dates(
         run_count = conn.execute("SELECT COUNT(*) FROM shadow_runs").fetchone()[0]
 
     assert run_count == 0
+
+
+def test_allocations_for_run_restores_stock_instrument_type_from_gate_components(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "shadow.sqlite"
+    _use_temp_db(monkeypatch, db_path)
+    init_db(db_path)
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO shadow_runs
+            (run_at, basis_date, market_basis_date, theme_report_id, market_regime,
+             risk_budget_ratio, cash_ratio, previous_nav, nav, daily_return_ratio,
+             reason, payload_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "2026-06-24T18:00:00+08:00",
+                "2026-06-24",
+                "2026-06-24",
+                "theme_2026-06-24",
+                "test",
+                20.0,
+                80.0,
+                1.0,
+                1.0,
+                0.0,
+                "test",
+                "{}",
+            ),
+        )
+        run_id = int(cursor.lastrowid)
+        conn.execute(
+            """
+            INSERT INTO target_allocations
+            (run_id, code, name, sleeve, theme, stage, target_weight_ratio,
+             previous_weight_ratio, drift_ratio, price, pct_chg, evidence_score,
+             pre_gate_weight_ratio, etf_gate_grade, etf_gate_score, etf_gate_pass,
+             etf_execution_ratio, etf_gate_reasons_json,
+             etf_gate_reject_reasons_json, etf_gate_data_gaps_json,
+             etf_gate_components_json, source_note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                "688999.SH",
+                "机器人龙头",
+                "thematic",
+                "机器人",
+                "主线确认/资金收敛",
+                6.0,
+                0.0,
+                6.0,
+                30.0,
+                2.0,
+                88.0,
+                6.0,
+                "A",
+                86.0,
+                1,
+                1.0,
+                "[]",
+                "[]",
+                "[]",
+                service.dumps({"instrument_gate": "stock_leader"}),
+                "tushare.daily",
+            ),
+        )
+        conn.commit()
+
+        rows = service._allocations_for_run(conn, run_id)
+
+    assert rows[0]["instrument_type"] == "stock"

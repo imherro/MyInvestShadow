@@ -16,6 +16,9 @@ MARKET_API_URL = os.getenv(
 THEME_API_URL = os.getenv(
     "THEME_API_URL", "https://theme.okbbc.com/api/latest"
 )
+ETF_API_URL = os.getenv("ETF_API_URL", "https://etf.okbbc.com/api/latest")
+STOCK_API_URL = os.getenv("STOCK_API_URL", "https://stock.okbbc.com/api/latest")
+LEADER_API_URL = os.getenv("LEADER_API_URL", "https://leader.okbbc.com/api/latest")
 
 HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 MyInvestShadow/0.1 (+https://github.com/imherro/MyInvestShadow)",

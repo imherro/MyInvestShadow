@@ -7,8 +7,18 @@ from typing import Any
 
 import httpx
 
-from .config import HTTP_HEADERS, MARKET_API_URL, THEME_API_URL
+from .config import (
+    ETF_API_URL,
+    HTTP_HEADERS,
+    LEADER_API_URL,
+    MARKET_API_URL,
+    STOCK_API_URL,
+    THEME_API_URL,
+)
 from .db import dumps
+from .etf_research import etf_basis_date
+from .phase import classify_shadow_phase, stage_from_cycle
+from .stock_research import stock_basis_date
 
 
 @dataclass(frozen=True)
@@ -44,25 +54,75 @@ def normalize_theme_payload(payload: dict[str, Any]) -> dict[str, Any]:
     result = payload.get("result")
     if not isinstance(result, dict):
         return payload
-    ranking = result.get("theme_ranking") or []
+    has_mainline_ranking = bool(result.get("mainline_ranking"))
+    ranking = result.get("mainline_ranking") or result.get("theme_ranking") or []
+    legacy_rows = [
+        row
+        for row in [*(result.get("theme_ranking") or []), *(result.get("legacy_theme_ranking") or [])]
+        if isinstance(row, dict)
+    ]
+    legacy_by_id = {
+        str(row.get("theme_id") or row.get("theme") or row.get("theme_name") or ""): row
+        for row in legacy_rows
+    }
+    legacy_by_name = {
+        str(row.get("theme") or row.get("theme_name") or ""): row for row in legacy_rows
+    }
     theme_signals: list[dict[str, Any]] = []
     for index, row in enumerate(ranking, start=1):
-        stage = str(row.get("stage") or "")
+        theme_name = row.get("theme_name") or row.get("theme") or ""
+        theme_id = row.get("theme_id") or theme_name
+        legacy = legacy_by_id.get(str(theme_id)) or legacy_by_name.get(str(theme_name)) or {}
+        fallback_stage = str(legacy.get("stage") or row.get("stage") or "")
+        stage_source = {**legacy, **row}
+        stage = stage_from_cycle(stage_source, fallback_stage) if has_mainline_ranking else fallback_stage
         try:
-            evidence_score = float(row.get("evidence_score") or 0.0)
+            evidence_score = float(
+                row.get("cycle_evidence_score")
+                or legacy.get("evidence_score")
+                or row.get("evidence_score")
+                or 0.0
+            )
         except (TypeError, ValueError):
             evidence_score = 0.0
-        score_weight_ratio = 0.0 if "弱势" in stage or "退潮" in stage else evidence_score
+        try:
+            mainline_score = float(row.get("mainline_score_v6") or legacy.get("mainline_score_v6") or 0.0)
+        except (TypeError, ValueError):
+            mainline_score = 0.0
+        score_weight_ratio = (
+            0.0
+            if "弱势" in stage or "退潮" in stage
+            else max(evidence_score, mainline_score * 40.0)
+        )
+        phase = classify_shadow_phase(stage_source)
         theme_signals.append(
             {
                 "rank": row.get("rank") or index,
-                "theme": row.get("theme") or "",
+                "theme_id": theme_id,
+                "theme": theme_name,
                 "stage": stage,
+                "shadow_phase": phase["shadow_phase"],
+                "instrument_preference": phase["instrument_preference"],
+                "phase_reason": phase["phase_reason"],
+                "cycle_stage": row.get("cycle_stage") or legacy.get("cycle_stage"),
+                "cycle_stage_label": row.get("cycle_stage_label") or legacy.get("cycle_stage_label"),
+                "lifecycle_state": row.get("lifecycle_state") or legacy.get("lifecycle_state"),
+                "lifecycle_state_label": row.get("lifecycle_state_label")
+                or legacy.get("lifecycle_state_label"),
+                "cycle_market_score": row.get("cycle_market_score") or legacy.get("market_score"),
+                "cycle_evidence_score": row.get("cycle_evidence_score") or legacy.get("evidence_score"),
+                "mainline_score_v6": row.get("mainline_score_v6") or legacy.get("mainline_score_v6"),
                 "evidence_score": evidence_score,
-                "evidence_count": row.get("evidence_count"),
-                "etf_score": row.get("etf_score"),
-                "top_indices": row.get("top_indices") or row.get("top_ths") or row.get("top_sw"),
-                "top_etf": row.get("top_etf") or "",
+                "evidence_count": row.get("event_count_30d") or legacy.get("evidence_count"),
+                "etf_score": legacy.get("etf_score") or row.get("etf_score"),
+                "market_score": legacy.get("market_score") or row.get("market_score"),
+                "top_indices": legacy.get("top_indices")
+                or legacy.get("top_ths")
+                or legacy.get("top_sw")
+                or row.get("top_indices")
+                or row.get("top_ths")
+                or row.get("top_sw"),
+                "top_etf": legacy.get("top_etf") or row.get("top_etf") or "",
                 "score_weight_ratio": score_weight_ratio,
             }
         )
@@ -101,12 +161,22 @@ def extract_market_basis(payload: dict[str, Any]) -> str | None:
     )
 
 
+def extract_optional_basis(source: str, payload: dict[str, Any]) -> str | None:
+    if source == "etf":
+        return etf_basis_date(payload)
+    if source in {"stock", "leader"}:
+        return stock_basis_date(payload)
+    return payload.get("basis_date")
+
+
 def make_snapshot(source: str, payload: dict[str, Any]) -> SourceSnapshot:
     if source == "theme":
         payload = normalize_theme_payload(payload)
     basis_date = payload.get("basis_date")
     if source == "market":
         basis_date = extract_market_basis(payload)
+    elif source in {"etf", "stock", "leader"}:
+        basis_date = extract_optional_basis(source, payload)
     return SourceSnapshot(
         source=source,
         fetched_at=now_iso(),
@@ -146,3 +216,22 @@ def fetch_market_and_theme(
         theme = error_snapshot("theme", exc)
 
     return market, theme
+
+
+def fetch_optional_source(source: str, url: str) -> SourceSnapshot:
+    try:
+        return make_snapshot(source, fetch_json(url))
+    except Exception as exc:  # pragma: no cover - exercised by integration failures
+        return error_snapshot(source, exc)
+
+
+def fetch_research_sources(
+    etf_url: str = ETF_API_URL,
+    stock_url: str = STOCK_API_URL,
+    leader_url: str = LEADER_API_URL,
+) -> tuple[SourceSnapshot, SourceSnapshot, SourceSnapshot]:
+    return (
+        fetch_optional_source("etf", etf_url),
+        fetch_optional_source("stock", stock_url),
+        fetch_optional_source("leader", leader_url),
+    )

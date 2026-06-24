@@ -8,7 +8,13 @@ from portfolio.position_sizer import compute_target_position
 from portfolio.structure_guard import enforce_structure_constraints
 
 from .etf_gate import evaluate_etf_gate, gate_weight_factor
+from .etf_research import (
+    defensive_quality_candidates,
+    enrich_theme_signals_with_etf_research,
+    etf_research_by_code,
+)
 from .pricing import PricePoint
+from .stock_research import extract_stock_candidates, stock_gate_score, theme_matches_stock
 
 ETF_CODE_RE = re.compile(r"\b(?P<code>\d{6}\.(?:SH|SZ|BJ))\b\s*(?P<name>[^、,，;；]*)")
 SYNTHETIC_INSTRUMENTS = {
@@ -75,11 +81,11 @@ def parse_percent_range_bounds(value: str | None) -> tuple[float, float] | None:
     return clamp(low, 0.0, 100.0), clamp(high, 0.0, 100.0)
 
 
-def extract_etf_candidates(text: str | None) -> list[dict[str, str]]:
+def extract_etf_candidates(text: str | None) -> list[dict[str, Any]]:
     if not text:
         return []
     seen: set[str] = set()
-    result: list[dict[str, str]] = []
+    result: list[dict[str, Any]] = []
     for match in ETF_CODE_RE.finditer(text):
         code = match.group("code")
         if code in seen:
@@ -365,8 +371,18 @@ def _safe_rank(signal: dict[str, Any]) -> int:
         return 999
 
 
-def _signal_candidates(signal: dict[str, Any]) -> list[dict[str, str]]:
+def _signal_candidates(signal: dict[str, Any]) -> list[dict[str, Any]]:
     return extract_etf_candidates(signal.get("top_etf"))
+
+
+def _attach_etf_research(
+    candidates: list[dict[str, Any]], etf_research_map: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    result = []
+    for candidate in candidates:
+        research = etf_research_map.get(str(candidate.get("code") or ""))
+        result.append({**candidate, **({"etf_research": research} if research else {})})
+    return result
 
 
 def _direction_key(signal: dict[str, Any]) -> str:
@@ -387,8 +403,8 @@ def _liquidity_key(point: PricePoint | None) -> tuple[int, float, int, float]:
 
 
 def _direction_representative_candidate(
-    candidates: list[dict[str, str]], price_map: dict[str, PricePoint]
-) -> dict[str, str] | None:
+    candidates: list[dict[str, Any]], price_map: dict[str, PricePoint]
+) -> dict[str, Any] | None:
     if not candidates:
         return None
     return max(
@@ -403,10 +419,10 @@ def _direction_representative_candidate(
 def _representative_gate_report(
     *,
     signal: dict[str, Any],
-    candidate: dict[str, str],
+    candidate: dict[str, Any],
     point: PricePoint | None,
     sleeve: str,
-    representative: dict[str, str] | None,
+    representative: dict[str, Any] | None,
     reason: str,
     scoring_sleeve: str | None = None,
 ) -> dict[str, Any]:
@@ -498,7 +514,7 @@ def _gate_display_sleeve(signal: dict[str, Any]) -> tuple[str, str]:
     return "candidate", "thematic"
 
 
-def _first_candidate(signal: dict[str, Any]) -> dict[str, str] | None:
+def _first_candidate(signal: dict[str, Any]) -> dict[str, Any] | None:
     candidates = _signal_candidates(signal)
     return candidates[0] if candidates else None
 
@@ -643,7 +659,11 @@ def _thematic_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _distribute_budget(
-    signals: list[dict[str, Any]], budget: float, price_map: dict[str, PricePoint], sleeve: str
+    signals: list[dict[str, Any]],
+    budget: float,
+    price_map: dict[str, PricePoint],
+    sleeve: str,
+    etf_research_map: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], float, list[dict[str, Any]]]:
     if budget <= 0 or not signals:
         return [], budget, []
@@ -651,7 +671,7 @@ def _distribute_budget(
     entries: list[dict[str, Any]] = []
     gate_reports: list[dict[str, Any]] = []
     for signal in signals:
-        candidates = _signal_candidates(signal)
+        candidates = _attach_etf_research(_signal_candidates(signal), etf_research_map or {})
         if not candidates:
             continue
         representative = _direction_representative_candidate(candidates, price_map)
@@ -737,6 +757,7 @@ def _distribute_thematic_budget(
     price_map: dict[str, PricePoint],
     excluded_codes: set[str],
     excluded_directions: set[str],
+    etf_research_map: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], float, list[dict[str, Any]]]:
     if budget <= 0 or not signals:
         return [], budget, []
@@ -744,7 +765,7 @@ def _distribute_thematic_budget(
     reviewed: list[dict[str, Any]] = []
     for signal in signals:
         direction_key = _direction_key(signal)
-        candidates = _signal_candidates(signal)
+        candidates = _attach_etf_research(_signal_candidates(signal), etf_research_map or {})
         representative = _direction_representative_candidate(candidates, price_map)
         if representative is None:
             continue
@@ -887,6 +908,240 @@ def _distribute_thematic_budget(
     return rows, max(0.0, budget - used), reviewed
 
 
+def _defensive_quality_target(defensive_weight: float, market_payload: dict[str, Any]) -> float:
+    record = market_record(market_payload)
+    score = _market_score_value(record)
+    regime = _regime_value(record)
+    if defensive_weight <= 0:
+        return 0.0
+    if regime == "risk_on" or score >= 60:
+        share = 0.25
+        cap = 12.0
+    elif score >= 40:
+        share = 0.35
+        cap = 18.0
+    else:
+        share = 0.40
+        cap = 25.0
+    return min(defensive_weight * share, cap)
+
+
+def _distribute_defensive_quality_budget(
+    budget: float,
+    market_payload: dict[str, Any],
+    price_map: dict[str, PricePoint],
+    etf_payload: dict[str, Any] | None,
+    etf_research_map: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], float, list[dict[str, Any]]]:
+    target = _defensive_quality_target(budget, market_payload)
+    if target <= 0:
+        return [], budget, []
+
+    reviewed: list[dict[str, Any]] = []
+    candidates = defensive_quality_candidates(etf_payload)
+    for item in candidates:
+        code = str(item.get("code") or "")
+        if not code:
+            continue
+        candidate = {
+            "code": code,
+            "name": item.get("name") or code,
+            "etf_research": etf_research_map.get(code) or item,
+        }
+        signal = {
+            "theme": item.get("theme") or item.get("category_key") or "收益防御",
+            "stage": "收益防御",
+            "evidence_score": item.get("deep_score") or 70.0,
+            "score_weight_ratio": item.get("deep_score") or 70.0,
+            "etf_research": candidate["etf_research"],
+        }
+        report = _pre_allocation_gate_report(
+            _representative_gate_report(
+                signal=signal,
+                candidate=candidate,
+                point=price_map.get(code),
+                sleeve="defensive_quality",
+                representative=candidate,
+                reason="收益防御ETF候选",
+                scoring_sleeve="defensive_quality",
+            )
+        )
+        report["candidate_budget_ratio"] = 0.0
+        report["executed_weight_ratio"] = 0.0
+        report["selected"] = False
+        reviewed.append(report)
+
+    eligible = [
+        row
+        for row in reviewed
+        if row.get("pre_gate_tradeable") and str(row.get("grade") or "") in {"A", "B", "C"}
+    ]
+    if not eligible:
+        return [], budget, reviewed
+    selected = sorted(
+        eligible,
+        key=lambda row: (
+            -float(row.get("score") or 0.0),
+            -float(((row.get("metrics") or {}).get("amount")) or 0.0),
+            str(row.get("code") or ""),
+        ),
+    )[:2]
+    total_score = sum(float(row.get("score") or 1.0) for row in selected) or float(len(selected))
+    rows: list[dict[str, Any]] = []
+    for report in reviewed:
+        if report not in selected:
+            if report.get("pre_gate_tradeable"):
+                report["reasons"] = list(
+                    dict.fromkeys([*report.get("reasons", []), "收益防御排序未入选"])
+                )
+            continue
+        target_weight = target * float(report.get("score") or 1.0) / total_score
+        report["candidate_budget_ratio"] = target_weight
+        report["executed_weight_ratio"] = target_weight
+        report["selected"] = True
+        point = price_map.get(str(report["code"]))
+        row = _priced_row(
+            code=str(report["code"]),
+            name=str(report["name"]),
+            sleeve="defensive",
+            theme=str(report.get("theme") or "收益防御"),
+            stage="收益防御",
+            target_weight_ratio=target_weight,
+            evidence_score=None,
+            point=point,
+            source_note="defensive.quality_etf",
+        )
+        row.update(
+            {
+                "pre_gate_weight_ratio": target_weight,
+                "etf_gate_grade": report["grade"],
+                "etf_gate_score": report["score"],
+                "etf_gate_pass": report["execution_ratio"] > 0,
+                "etf_execution_ratio": report["execution_ratio"],
+                "etf_gate_reasons": [
+                    *report.get("reasons", []),
+                    "防御仓收益层，不按主线追涨规则处理",
+                ],
+                "etf_gate_reject_reasons": report["reject_reasons"],
+                "etf_gate_data_gaps": report["data_gaps"],
+                "etf_gate_components": {
+                    **(report.get("components") or {}),
+                    "defensive_layer": "quality",
+                    "gate_weight_factor": report.get("gate_weight_factor"),
+                },
+            }
+        )
+        rows.append(row)
+    used = sum(float(row["target_weight_ratio"]) for row in rows)
+    return rows, max(0.0, budget - used), reviewed
+
+
+def _stock_theme_score(candidate: dict[str, Any]) -> float:
+    score, _reasons, rejects = stock_gate_score(candidate)
+    return 0.0 if rejects else score
+
+
+def _distribute_stock_leader_budget(
+    signals: list[dict[str, Any]],
+    budget: float,
+    price_map: dict[str, PricePoint],
+    stock_payload: dict[str, Any] | None,
+    excluded_directions: set[str],
+) -> tuple[list[dict[str, Any]], float, list[dict[str, Any]]]:
+    if budget <= 0 or not stock_payload:
+        return [], budget, []
+    leader_signals = [
+        signal
+        for signal in signals
+        if signal.get("instrument_preference") in {"leader", "etf_then_leader"}
+        and _direction_key(signal) not in excluded_directions
+    ]
+    if not leader_signals:
+        return [], budget, []
+
+    reviewed: list[dict[str, Any]] = []
+    for candidate in extract_stock_candidates(stock_payload):
+        matched_signal = next(
+            (signal for signal in leader_signals if theme_matches_stock(signal, candidate)),
+            None,
+        )
+        if matched_signal is None:
+            continue
+        score, reasons, reject_reasons = stock_gate_score(candidate)
+        reviewed.append(
+            {
+                "code": candidate["code"],
+                "name": candidate["name"],
+                "theme": candidate.get("theme") or _direction_key(matched_signal),
+                "stage": matched_signal.get("stage") or "龙头弹性",
+                "score": score,
+                "grade": "A" if score >= 80 and not reject_reasons else "B" if score >= 70 and not reject_reasons else "D",
+                "selected": False,
+                "candidate_budget_ratio": 0.0,
+                "executed_weight_ratio": 0.0,
+                "reasons": reasons,
+                "reject_reasons": reject_reasons,
+                "data_gaps": candidate.get("data_gaps") or [],
+                "candidate": candidate,
+            }
+        )
+
+    eligible = [row for row in reviewed if row["grade"] in {"A", "B"}]
+    if not eligible:
+        return [], budget, reviewed
+
+    stock_budget = min(budget, 8.0)
+    selected = sorted(eligible, key=lambda row: (-float(row["score"]), row["code"]))[:2]
+    total = sum(float(row["score"]) for row in selected) or float(len(selected))
+    rows: list[dict[str, Any]] = []
+    for report in reviewed:
+        if report not in selected:
+            if report["grade"] in {"A", "B"}:
+                report["reasons"] = list(
+                    dict.fromkeys([*report.get("reasons", []), "龙头弹性排序未入选"])
+                )
+            continue
+        target_weight = min(6.0, stock_budget * float(report["score"]) / total)
+        report["candidate_budget_ratio"] = target_weight
+        report["executed_weight_ratio"] = target_weight
+        report["selected"] = True
+        point = price_map.get(str(report["code"]))
+        row = _priced_row(
+            code=str(report["code"]),
+            name=str(report["name"]),
+            sleeve="thematic",
+            theme=str(report["theme"]),
+            stage=str(report["stage"]),
+            target_weight_ratio=target_weight,
+            evidence_score=report["score"],
+            point=point,
+            source_note="stock_research.leader_optional",
+        )
+        row.update(
+            {
+                "instrument_type": "stock",
+                "pre_gate_weight_ratio": target_weight,
+                "etf_gate_grade": report["grade"],
+                "etf_gate_score": report["score"],
+                "etf_gate_pass": True,
+                "etf_execution_ratio": 1.0,
+                "etf_gate_reasons": [
+                    *report.get("reasons", []),
+                    "来自MyInvestStock同日龙头研究，按主题弹性小仓处理",
+                ],
+                "etf_gate_reject_reasons": report["reject_reasons"],
+                "etf_gate_data_gaps": report["data_gaps"],
+                "etf_gate_components": {
+                    "instrument_gate": "stock_leader",
+                    "single_name_cap_ratio": 6.0,
+                },
+            }
+        )
+        rows.append(row)
+    used = sum(float(row["target_weight_ratio"]) for row in rows)
+    return rows, max(0.0, budget - used), reviewed
+
+
 def _actual_gate_report_by_direction(
     gate_reports: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
@@ -919,12 +1174,13 @@ def _direction_gate_reports(
     signals: list[dict[str, Any]],
     price_map: dict[str, PricePoint],
     actual_gate_reports: list[dict[str, Any]],
+    etf_research_map: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     actual_by_direction = _actual_gate_report_by_direction(actual_gate_reports)
     reports: list[dict[str, Any]] = []
     for signal in _direction_gate_signals(signals):
         direction_key = _direction_key(signal)
-        candidates = _signal_candidates(signal)
+        candidates = _attach_etf_research(_signal_candidates(signal), etf_research_map or {})
         representative = _direction_representative_candidate(candidates, price_map)
         if representative is None:
             continue
@@ -1017,13 +1273,22 @@ def _scale_sleeve_rows(rows: list[dict[str, Any]], sleeve: str, target_weight: f
 def allocation_candidate_codes(
     market_payload: dict[str, Any],
     theme_payload: dict[str, Any],
+    etf_payload: dict[str, Any] | None = None,
+    stock_payload: dict[str, Any] | None = None,
 ) -> list[str]:
     signals = theme_payload.get("theme_signals") or []
     codes = {str(item["code"]) for item in CORE_ETF_BASKET}
     codes.add(str(DEFENSIVE_ETF["code"]))
+    signals = enrich_theme_signals_with_etf_research(signals, etf_payload)
     for signal in _direction_gate_signals(signals):
         for candidate in _signal_candidates(signal):
             codes.add(candidate["code"])
+    for item in defensive_quality_candidates(etf_payload):
+        if item.get("code"):
+            codes.add(str(item["code"]))
+    for candidate in extract_stock_candidates(stock_payload):
+        if candidate.get("code"):
+            codes.add(str(candidate["code"]))
     return sorted(codes)
 
 
@@ -1031,27 +1296,46 @@ def allocation_plan(
     market_payload: dict[str, Any],
     theme_payload: dict[str, Any],
     price_map: dict[str, PricePoint] | None = None,
+    etf_payload: dict[str, Any] | None = None,
+    stock_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     price_map = price_map or {}
+    etf_research_map = etf_research_by_code(etf_payload)
     position_sizing = _position_sizing_from_market(market_payload)
     sleeves = sleeve_targets_from_market(market_payload)
     allocation_policy = allocation_policy_from_market(
         market_payload, sleeves, position_sizing
     )
-    signals = theme_payload.get("theme_signals") or []
+    signals = enrich_theme_signals_with_etf_research(theme_payload.get("theme_signals") or [], etf_payload)
 
     rows: list[dict[str, Any]] = []
     core_codes = {str(item["code"]) for item in CORE_ETF_BASKET}
 
     mainline_rows, mainline_unused, mainline_gate = _distribute_budget(
-        _mainline_signals(signals), sleeves["mainline"], price_map, "mainline"
+        _mainline_signals(signals),
+        sleeves["mainline"],
+        price_map,
+        "mainline",
+        etf_research_map,
+    )
+    stock_rows, remaining_thematic_budget, stock_gate = _distribute_stock_leader_budget(
+        signals,
+        sleeves["thematic"],
+        price_map,
+        stock_payload,
+        {str(row.get("theme") or "") for row in mainline_rows if row.get("theme")},
     )
     thematic_rows, thematic_unused, thematic_gate = _distribute_thematic_budget(
         _thematic_signals(signals),
-        sleeves["thematic"],
+        remaining_thematic_budget,
         price_map,
-        {*core_codes, *(row["code"] for row in mainline_rows)},
-        {str(row.get("theme") or "") for row in mainline_rows if row.get("theme")},
+        {*core_codes, *(row["code"] for row in mainline_rows), *(row["code"] for row in stock_rows)},
+        {
+            str(row.get("theme") or "")
+            for row in [*mainline_rows, *stock_rows]
+            if row.get("theme")
+        },
+        etf_research_map,
     )
     actual_gate_reports = [*mainline_gate, *thematic_gate]
     valid_universe_size = sum(1 for row in actual_gate_reports if row.get("pre_gate_tradeable"))
@@ -1060,7 +1344,7 @@ def allocation_plan(
         {
             "core": sleeves["core"],
             "mainline": sum(float(row["target_weight_ratio"]) for row in mainline_rows),
-            "thematic": sum(float(row["target_weight_ratio"]) for row in thematic_rows),
+            "thematic": sum(float(row["target_weight_ratio"]) for row in [*stock_rows, *thematic_rows]),
             "unallocated": {
                 "mainline": mainline_unused,
                 "thematic": thematic_unused,
@@ -1072,12 +1356,21 @@ def allocation_plan(
     guarded_sleeves = structure_guard["allocation"]
     rows.extend(_core_etf_rows(guarded_sleeves["core"], price_map, market_payload))
     rows.extend(mainline_rows)
+    rows.extend(stock_rows)
     rows.extend(thematic_rows)
     _scale_sleeve_rows(rows, "mainline", float(guarded_sleeves["mainline"]))
     _scale_sleeve_rows(rows, "thematic", float(guarded_sleeves["thematic"]))
 
     used_non_defensive = sum(float(row["target_weight_ratio"]) for row in rows)
     defensive_weight = float(guarded_sleeves["defensive"])
+    defensive_quality_rows, cash_defensive_weight, defensive_quality_gate = _distribute_defensive_quality_budget(
+        defensive_weight,
+        market_payload,
+        price_map,
+        etf_payload,
+        etf_research_map,
+    )
+    rows.extend(defensive_quality_rows)
     rows.append(
         _priced_row(
             code=str(DEFENSIVE_ETF["code"]),
@@ -1085,7 +1378,7 @@ def allocation_plan(
             sleeve="defensive",
             theme=str(DEFENSIVE_ETF["theme"]),
             stage="货币ETF/等待",
-            target_weight_ratio=defensive_weight,
+            target_weight_ratio=cash_defensive_weight,
             evidence_score=None,
             point=price_map.get(str(DEFENSIVE_ETF["code"])),
             source_note="defensive.money_market_etf",
@@ -1101,7 +1394,10 @@ def allocation_plan(
             -float(row["target_weight_ratio"]),
         ),
     )
-    gate_reports = _direction_gate_reports(signals, price_map, actual_gate_reports)
+    gate_reports = [
+        *_direction_gate_reports(signals, price_map, actual_gate_reports, etf_research_map),
+        *defensive_quality_gate,
+    ]
     gate_universe_audit = {
         "pre_gate_universe_size": len(actual_gate_reports),
         "post_gate_universe_size": valid_universe_size,
@@ -1111,6 +1407,12 @@ def allocation_plan(
         ),
         "mainline_unallocated_ratio": mainline_unused,
         "thematic_unallocated_ratio": thematic_unused,
+        "stock_candidate_count": len(stock_gate),
+        "stock_selected_count": sum(1 for row in stock_gate if row.get("selected")),
+        "defensive_quality_candidate_count": len(defensive_quality_gate),
+        "defensive_quality_selected_count": sum(
+            1 for row in defensive_quality_gate if row.get("selected")
+        ),
     }
     return {
         "market_risk_budget_ratio": sum(float(sleeves[key]) for key in ("core", "mainline", "thematic")),
@@ -1123,6 +1425,8 @@ def allocation_plan(
         "targets": sorted_rows,
         "etf_gate": gate_reports,
         "etf_gate_summary": _gate_summary(gate_reports),
+        "stock_gate": stock_gate,
+        "defensive_quality_gate": defensive_quality_gate,
     }
 
 
@@ -1130,8 +1434,10 @@ def target_allocations(
     market_payload: dict[str, Any],
     theme_payload: dict[str, Any],
     price_map: dict[str, PricePoint] | None = None,
+    etf_payload: dict[str, Any] | None = None,
+    stock_payload: dict[str, Any] | None = None,
 ) -> tuple[float, list[dict[str, Any]]]:
-    plan = allocation_plan(market_payload, theme_payload, price_map)
+    plan = allocation_plan(market_payload, theme_payload, price_map, etf_payload, stock_payload)
     return float(plan["risk_budget_ratio"]), plan["targets"]
 
 

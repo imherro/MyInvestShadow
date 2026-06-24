@@ -12,8 +12,14 @@ from .allocator import (
     sleeve_summary,
 )
 from .db import connect, dumps, init_db, loads, row_to_dict, rows_to_dicts
-from .pricing import PricePoint, fetch_tushare_prices, merge_price_maps, theme_price_fallback
-from .upstream import SourceSnapshot, extract_market_basis, fetch_market_and_theme, now_iso
+from .pricing import PricePoint, combined_price_fallback, fetch_tushare_prices, merge_price_maps
+from .upstream import (
+    SourceSnapshot,
+    extract_market_basis,
+    fetch_market_and_theme,
+    fetch_research_sources,
+    now_iso,
+)
 
 
 def _store_source_snapshot(conn: Any, snapshot: SourceSnapshot) -> None:
@@ -146,19 +152,27 @@ def _allocations_for_run(conn: Any, run_id: int | None) -> list[dict[str, Any]]:
     ).fetchall()
     result = rows_to_dicts(rows)
     for row in result:
-        synthetic = SYNTHETIC_INSTRUMENTS.get(row.get("code"))
-        row["display_code"] = synthetic["display_code"] if synthetic else row.get("code")
-        row["instrument_type"] = synthetic["instrument_type"] if synthetic else "etf"
-        row["is_synthetic"] = bool(synthetic)
-        row["etf_gate_pass"] = (
-            bool(row["etf_gate_pass"]) if row.get("etf_gate_pass") is not None else None
-        )
         row["etf_gate_reasons"] = loads(row.pop("etf_gate_reasons_json", None)) or []
         row["etf_gate_reject_reasons"] = (
             loads(row.pop("etf_gate_reject_reasons_json", None)) or []
         )
         row["etf_gate_data_gaps"] = loads(row.pop("etf_gate_data_gaps_json", None)) or []
         row["etf_gate_components"] = loads(row.pop("etf_gate_components_json", None)) or {}
+        synthetic = SYNTHETIC_INSTRUMENTS.get(row.get("code"))
+        components = row.get("etf_gate_components") or {}
+        row["display_code"] = synthetic["display_code"] if synthetic else row.get("code")
+        if synthetic:
+            row["instrument_type"] = synthetic["instrument_type"]
+        elif str(row.get("source_note") or "").startswith("stock_research") or components.get(
+            "instrument_gate"
+        ) == "stock_leader":
+            row["instrument_type"] = "stock"
+        else:
+            row["instrument_type"] = "etf"
+        row["is_synthetic"] = bool(synthetic)
+        row["etf_gate_pass"] = (
+            bool(row["etf_gate_pass"]) if row.get("etf_gate_pass") is not None else None
+        )
     return result
 
 
@@ -199,18 +213,39 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
             allow_stale=allow_stale,
         )
 
+        etf_snapshot, stock_snapshot, leader_snapshot = fetch_research_sources()
+        _store_source_snapshot(conn, etf_snapshot)
+        _store_source_snapshot(conn, stock_snapshot)
+        _store_source_snapshot(conn, leader_snapshot)
+        conn.commit()
+
         previous_run = _latest_run_before(conn, basis_date)
         previous_allocations = _allocations_for_run(
             conn, int(previous_run["id"]) if previous_run else None
         )
+        etf_payload = (
+            etf_snapshot.payload
+            if etf_snapshot.ok and etf_snapshot.basis_date == basis_date
+            else None
+        )
+        stock_payload = (
+            stock_snapshot.payload
+            if stock_snapshot.ok and stock_snapshot.basis_date == basis_date
+            else None
+        )
 
         codes = sorted(
             {
-                *allocation_candidate_codes(market_payload, theme_payload),
+                *allocation_candidate_codes(
+                    market_payload,
+                    theme_payload,
+                    etf_payload=etf_payload,
+                    stock_payload=stock_payload,
+                ),
                 *(row["code"] for row in previous_allocations if row.get("code")),
             }
         )
-        fallback_prices = theme_price_fallback(theme_payload)
+        fallback_prices = combined_price_fallback(theme_payload, etf_payload)
         tushare_prices = fetch_tushare_prices(codes, basis_date) if codes else {}
         price_map = merge_price_maps(tushare_prices, fallback_prices)
         if "CORE.ASHARE" in codes:
@@ -218,7 +253,13 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
             if legacy_core_point and legacy_core_point.pct_chg is not None:
                 price_map["CORE.ASHARE"] = legacy_core_point
 
-        plan = allocation_plan(market_payload, theme_payload, price_map)
+        plan = allocation_plan(
+            market_payload,
+            theme_payload,
+            price_map,
+            etf_payload=etf_payload,
+            stock_payload=stock_payload,
+        )
         risk_budget = float(plan["risk_budget_ratio"])
         targets = plan["targets"]
         for row in targets:
@@ -250,8 +291,24 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
         payload = {
             "market_fetch_ok": market_snapshot.ok,
             "theme_fetch_ok": theme_snapshot.ok,
+            "etf_fetch_ok": etf_snapshot.ok,
+            "stock_fetch_ok": stock_snapshot.ok,
+            "leader_fetch_ok": leader_snapshot.ok,
             "market_fetch_error": market_snapshot.error,
             "theme_fetch_error": theme_snapshot.error,
+            "etf_fetch_error": etf_snapshot.error,
+            "stock_fetch_error": stock_snapshot.error,
+            "leader_fetch_error": leader_snapshot.error,
+            "optional_source_policy": {
+                "etf_used": etf_payload is not None,
+                "stock_used": stock_payload is not None,
+                "leader_used": False,
+                "etf_basis_date": etf_snapshot.basis_date,
+                "stock_basis_date": stock_snapshot.basis_date,
+                "leader_basis_date": leader_snapshot.basis_date,
+                "required_basis_date": basis_date,
+                "stale_optional_sources_are_ignored": True,
+            },
             "market_score": record.get("market_position_score"),
             "equity_position_range": record.get("equity_position_range"),
             "sleeve_summary": summary,
@@ -271,6 +328,17 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
                 "sleeve_targets_before_gate": plan["sleeve_targets_before_gate"],
                 "etf_gate_summary": plan["etf_gate_summary"],
                 "etf_gate": plan["etf_gate"],
+                "stock_gate": plan.get("stock_gate") or [],
+                "defensive_quality_gate": plan.get("defensive_quality_gate") or [],
+                "optional_source_policy": {
+                    "etf_used": etf_payload is not None,
+                    "stock_used": stock_payload is not None,
+                    "leader_used": False,
+                    "etf_basis_date": etf_snapshot.basis_date,
+                    "stock_basis_date": stock_snapshot.basis_date,
+                    "leader_basis_date": leader_snapshot.basis_date,
+                    "required_basis_date": basis_date,
+                },
             },
             "theme_report_id": theme_payload.get("report_id"),
             "basis_date": basis_date,
@@ -601,6 +669,21 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
         or {}
     )
     sleeve_weights = state.get("sleeve_summary") or {}
+    allocations = state.get("allocations") or []
+    defensive_quality_weight = 0.0
+    defensive_cash_weight = 0.0
+    for row in allocations:
+        if row.get("sleeve") != "defensive":
+            continue
+        components = row.get("etf_gate_components") or {}
+        weight = float(row.get("target_weight_ratio") or 0.0)
+        if (
+            components.get("defensive_layer") == "quality"
+            or row.get("source_note") == "defensive.quality_etf"
+        ):
+            defensive_quality_weight += weight
+        else:
+            defensive_cash_weight += weight
     metrics = {
         "nav": run.get("nav"),
         "active_weight_ratio": run.get("risk_budget_ratio"),
@@ -644,14 +727,31 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
                 "weight_ratio": sleeve_weights.get("defensive", 0.0),
             },
         ],
+        "defensive_layers": [
+            {
+                "key": "defensive_quality",
+                "label": "收益防御",
+                "weight_ratio": defensive_quality_weight,
+            },
+            {
+                "key": "cash_like",
+                "label": "现金防御",
+                "weight_ratio": defensive_cash_weight,
+            },
+        ],
         "sleeve_summary": sleeve_weights,
         "allocation_policy": allocation_policy,
+        "optional_source_policy": run_payload.get("optional_source_policy")
+        or decision_trace.get("optional_source_policy")
+        or {},
         "gate_universe_audit": gate_universe_audit,
         "structure_guard_report": structure_guard_report,
         "etf_gate_summary": etf_gate_summary,
         "etf_gate": etf_gate,
+        "stock_gate": decision_trace.get("stock_gate") or [],
+        "defensive_quality_gate": decision_trace.get("defensive_quality_gate") or [],
         "nav_curve": state.get("nav_curve") or [],
-        "allocations": state.get("allocations") or [],
+        "allocations": allocations,
         "rebalance_history": state.get("rebalance_history") or [],
         "source_status": state.get("source_status") or [],
         "links": {

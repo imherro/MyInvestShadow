@@ -19,6 +19,28 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+def _research_payload(signal: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    raw = candidate.get("etf_research") or signal.get("etf_research") or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _research_score(research: dict[str, Any], *keys: str) -> float | None:
+    values: list[float] = []
+    for container_key in ("valuation_signal", "scores"):
+        container = research.get(container_key) or {}
+        for key in keys:
+            value = _safe_float(container.get(key))
+            if value is not None:
+                values.append(value)
+    for key in keys:
+        value = _safe_float(research.get(key))
+        if value is not None:
+            values.append(value)
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
 def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
     return max(low, min(high, value))
 
@@ -35,16 +57,24 @@ def _stage_score(stage: str) -> float:
     return 55.0
 
 
-def _signal_fit_score(signal: dict[str, Any]) -> float:
+def _signal_fit_score(signal: dict[str, Any], research: dict[str, Any] | None = None) -> float:
     evidence = _safe_float(signal.get("evidence_score")) or _safe_float(
         signal.get("score_weight_ratio")
     )
     evidence = evidence if evidence is not None else 50.0
     stage = _stage_score(str(signal.get("stage") or ""))
     etf_score = _safe_float(signal.get("etf_score"))
-    if etf_score is None:
-        return _clamp(evidence * 0.65 + stage * 0.35)
-    return _clamp(evidence * 0.50 + stage * 0.30 + etf_score * 0.20)
+    base = _clamp(evidence * 0.65 + stage * 0.35) if etf_score is None else _clamp(
+        evidence * 0.50 + stage * 0.30 + etf_score * 0.20
+    )
+    research = research or {}
+    research_fit = _research_score(
+        research, "mainline_validity_score", "theme_binding", "mainline_strength"
+    )
+    deep_score = _safe_float(research.get("deep_score"))
+    if research_fit is not None:
+        base = base * 0.65 + research_fit * 0.25 + (deep_score or research_fit) * 0.10
+    return _clamp(base)
 
 
 def _rank_to_score(value: float | None) -> float | None:
@@ -84,11 +114,17 @@ def _liquidity_score(point: PricePoint | None, data_gaps: list[str]) -> tuple[fl
     return _clamp(score), reject_reasons
 
 
-def _valuation_score(point: PricePoint | None, data_gaps: list[str]) -> tuple[float, list[str]]:
+def _valuation_score(
+    point: PricePoint | None, data_gaps: list[str], research: dict[str, Any] | None = None
+) -> tuple[float, list[str]]:
     reject_reasons: list[str] = []
+    research = research or {}
+    research_valuation = _research_score(research, "valuation_tolerance_score", "undervalued_score")
+    if research and research_valuation is None:
+        data_gaps.append("MyInvestETF估值未刷新")
     if point is None:
         data_gaps.append("缺少ETF估值替代指标")
-        return 0.0, ["缺少估值门禁数据"]
+        return (research_valuation or 0.0), ["缺少估值门禁数据"] if research_valuation is None else []
 
     premium = point.premium_rate
     if premium is None:
@@ -134,6 +170,8 @@ def _valuation_score(point: PricePoint | None, data_gaps: list[str]) -> tuple[fl
     if r1 is not None and r1 >= 8.0:
         score -= 8.0
 
+    if research_valuation is not None:
+        score = score * 0.55 + research_valuation * 0.45
     return _clamp(score), reject_reasons
 
 
@@ -165,6 +203,24 @@ def _trend_score(point: PricePoint | None, data_gaps: list[str]) -> float:
     return _clamp(score)
 
 
+def _defensive_fit_score(candidate: dict[str, Any], research: dict[str, Any]) -> float:
+    text = " ".join(
+        str(value or "")
+        for value in (
+            candidate.get("name"),
+            research.get("name"),
+            research.get("valuation_model_type"),
+            research.get("sleeve_key"),
+            research.get("category_key"),
+        )
+    )
+    if research.get("sleeve_key") == "defensive_quality" or research.get("valuation_model_type") == "factor_defensive":
+        return 95.0
+    if any(token in text for token in ("红利", "低波", "自由现金流", "现金流", "高股息")):
+        return 85.0
+    return 45.0
+
+
 def _grade(score: float, hard_pass: bool) -> tuple[str, float]:
     if not hard_pass or score < 55.0:
         return "D", 0.0
@@ -189,13 +245,26 @@ def evaluate_etf_gate(
     data_gaps: list[str] = []
     reject_reasons: list[str] = []
     reasons: list[str] = []
+    research = _research_payload(signal, candidate)
 
-    fit_score = _signal_fit_score(signal)
+    fit_score = _signal_fit_score(signal, research)
     liquidity_score, liquidity_rejects = _liquidity_score(point, data_gaps)
-    valuation_score, valuation_rejects = _valuation_score(point, data_gaps)
+    research_liquidity = _research_score(research, "liquidity_score", "trading_structure")
+    if research_liquidity is not None:
+        liquidity_score = _clamp(liquidity_score * 0.65 + research_liquidity * 0.35)
+    valuation_score, valuation_rejects = _valuation_score(point, data_gaps, research)
     trend_score = _trend_score(point, data_gaps)
+    tracking_score = _research_score(research, "tracking_score")
+    role_score = _research_score(research, "portfolio_role_score", "risk_adjusted_score")
+    factor_score = _research_score(research, "factor_premium_score", "risk_adjusted_score")
     reject_reasons.extend(liquidity_rejects)
     reject_reasons.extend(valuation_rejects)
+    if research and research.get("shadow_observation_eligible") is False:
+        reject_reasons.append("MyInvestETF未标记为影子可观察")
+    if research and research.get("deep_rating") == "D":
+        reject_reasons.append("MyInvestETF深研等级为D")
+    if research.get("risk_flags"):
+        reject_reasons.append("MyInvestETF存在风险标记")
 
     if fit_score < 45.0:
         reject_reasons.append("主线匹配度不足")
@@ -203,13 +272,33 @@ def evaluate_etf_gate(
         reject_reasons.append("缺少收盘表现与ETF排名")
 
     data_quality_score = _clamp(100.0 - len(set(data_gaps)) * 12.0, 40.0, 100.0)
-    score = (
-        fit_score * 0.35
-        + valuation_score * 0.25
-        + liquidity_score * 0.20
-        + trend_score * 0.15
-        + data_quality_score * 0.05
-    )
+    if sleeve == "defensive_quality":
+        fit_score = _defensive_fit_score(candidate, research)
+        score = (
+            fit_score * 0.25
+            + (factor_score if factor_score is not None else valuation_score) * 0.30
+            + liquidity_score * 0.20
+            + (tracking_score if tracking_score is not None else data_quality_score) * 0.15
+            + (role_score if role_score is not None else data_quality_score) * 0.10
+        )
+        if point is None:
+            reject_reasons.append("缺少收益防御ETF交易数据")
+    elif sleeve == "mainline":
+        score = (
+            fit_score * 0.35
+            + trend_score * 0.25
+            + liquidity_score * 0.20
+            + valuation_score * 0.15
+            + data_quality_score * 0.05
+        )
+    else:
+        score = (
+            fit_score * 0.30
+            + trend_score * 0.25
+            + liquidity_score * 0.20
+            + valuation_score * 0.15
+            + data_quality_score * 0.10
+        )
     if sleeve == "thematic":
         score -= 5.0
 
@@ -235,6 +324,8 @@ def evaluate_etf_gate(
         reasons.append("存在数据缺口，估值项降权")
     if grade == "D":
         reasons.append("未通过ETF门禁")
+    if research:
+        reasons.append("已参考MyInvestETF研究输出")
 
     return {
         "code": candidate["code"],
@@ -256,7 +347,14 @@ def evaluate_etf_gate(
             "liquidity": round(liquidity_score, 2),
             "trend": round(trend_score, 2),
             "data_quality": round(data_quality_score, 2),
+            "tracking": round(tracking_score, 2) if tracking_score is not None else None,
+            "portfolio_role": round(role_score, 2) if role_score is not None else None,
+            "factor_premium": round(factor_score, 2) if factor_score is not None else None,
         },
+        "research_source": research.get("source") if research else None,
+        "research_deep_rating": research.get("deep_rating") if research else None,
+        "research_sleeve_key": research.get("sleeve_key") if research else None,
+        "research_valuation_model_type": research.get("valuation_model_type") if research else None,
         "metrics": {
             "pct_chg": point.pct_chg if point else None,
             "r5": point.r5 if point else None,
