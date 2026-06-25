@@ -26,6 +26,13 @@ def test_build_index_payload_is_homepage_focused() -> None:
             "defensive": 64.0,
         },
         "nav_curve": [{"basis_date": "2026-06-17", "nav": 1.0123}],
+        "benchmark_curve": [
+            {
+                "code": "510300.SH",
+                "name": "华泰柏瑞沪深300ETF",
+                "points": [{"basis_date": "2026-06-17", "close": 4.0, "normalized": 1.0}],
+            }
+        ],
         "allocations": [
             {"code": "510300.SH", "target_weight_ratio": 10.8},
             {
@@ -88,6 +95,8 @@ def test_build_index_payload_is_homepage_focused() -> None:
     assert payload["market_constraints"]["risk_caps"][0]["reason"] == "strong_index_weak_breadth"
     assert payload["stock_gate"][0]["selected"] is True
     assert payload["defensive_quality_gate"][0]["code"] == "512890.SH"
+    assert payload["benchmark_curve"][0]["code"] == "510300.SH"
+    assert payload["benchmark_curve"][0]["points"][0]["normalized"] == 1.0
     assert payload["etf_gate_summary"]["reviewed_count"] == 1
     assert payload["etf_gate"][0]["grade"] == "A"
     assert payload["allocation_policy"]["position_source"] == "market.sleeve_mix"

@@ -26,6 +26,8 @@ const sleeveLabels = {
   mainline: "主线仓位",
   thematic: "主题仓位",
   defensive: "防御仓位",
+  defensive_quality: "收益防御",
+  cash_like: "现金防御",
   mainline_watch: "主线备选",
   watch: "观察备选",
   candidate: "方向备选",
@@ -35,6 +37,8 @@ const sleeveShortLabels = {
   mainline: "主线",
   thematic: "主题",
   defensive: "防御",
+  defensive_quality: "收益",
+  cash_like: "现金",
 };
 const actionClass = {
   new: "positive",
@@ -141,33 +145,94 @@ function renderMetrics(data) {
   byId("marketRegime").textContent = run.market_regime || "暂无市场状态";
 }
 
-function renderNavChart(points) {
+const chartColor = (key) => ({
+  shadow: "#0f766e",
+  "510300.SH": "#2563eb",
+  "510500.SH": "#b7791f",
+}[key] || "#667085");
+
+const shortDate = (value) => {
+  const text = String(value || "");
+  return text.length >= 10 ? text.slice(5) : text;
+};
+
+function lineCoords(values, dates, min, span, width, height, padX, padTop, padBottom) {
+  return values
+    .map((point) => {
+      const index = dates.indexOf(point.basis_date);
+      const value = Number(point.value);
+      if (index < 0 || !Number.isFinite(value)) return null;
+      const x = dates.length === 1
+        ? width / 2
+        : padX + (index * (width - padX * 2)) / (dates.length - 1);
+      const y = height - padBottom - ((value - min) * (height - padTop - padBottom)) / span;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .filter(Boolean);
+}
+
+function renderNavChart(points, benchmarks = []) {
   const el = byId("navChart");
   if (!points || points.length === 0) {
     el.innerHTML = `<div class="empty-chart">暂无净值点</div>`;
     return;
   }
   const width = 900;
-  const height = 260;
-  const pad = 34;
-  const navs = points.map((p) => Number(p.nav));
-  const min = Math.min(...navs);
-  const max = Math.max(...navs);
+  const height = 300;
+  const padX = 46;
+  const padTop = 30;
+  const padBottom = 52;
+  const dates = points.map((p) => p.basis_date);
+  const shadowValues = points.map((p) => ({ basis_date: p.basis_date, value: Number(p.nav) }));
+  const benchmarkSeries = (benchmarks || []).map((series) => ({
+    ...series,
+    values: (series.points || [])
+      .filter((p) => p.normalized !== null && p.normalized !== undefined)
+      .map((p) => ({ basis_date: p.basis_date, value: Number(p.normalized), close: p.close })),
+  }));
+  const values = [
+    ...shadowValues.map((p) => p.value),
+    ...benchmarkSeries.flatMap((series) => series.values.map((p) => p.value)),
+  ].filter((value) => Number.isFinite(value));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
   const span = Math.max(max - min, 0.01);
-  const coords = points.map((p, index) => {
-    const x = points.length === 1 ? width / 2 : pad + (index * (width - pad * 2)) / (points.length - 1);
-    const y = height - pad - ((Number(p.nav) - min) * (height - pad * 2)) / span;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  });
+  const coords = lineCoords(shadowValues, dates, min, span, width, height, padX, padTop, padBottom);
   const last = points[points.length - 1];
+  const tickIndexes = [...new Set([
+    0,
+    Math.floor((points.length - 1) / 2),
+    points.length - 1,
+  ])];
+  const ticks = tickIndexes.map((index) => {
+    const x = points.length === 1
+      ? width / 2
+      : padX + (index * (width - padX * 2)) / (points.length - 1);
+    return `
+      <line x1="${x.toFixed(1)}" y1="${height - padBottom}" x2="${x.toFixed(1)}" y2="${height - padBottom + 5}" stroke="#98a2b3" />
+      <text x="${x.toFixed(1)}" y="${height - 20}" text-anchor="middle" fill="#667085">${shortDate(points[index].basis_date)}</text>
+    `;
+  }).join("");
+  const benchmarkLines = benchmarkSeries.map((series) => {
+    const seriesCoords = lineCoords(series.values, dates, min, span, width, height, padX, padTop, padBottom);
+    if (!seriesCoords.length) return "";
+    const lastPoint = [...(series.points || [])].reverse().find((p) => p.close !== null && p.close !== undefined);
+    const label = `${series.code} ${lastPoint ? Number(lastPoint.close).toFixed(3) : "--"}`;
+    return `
+      <polyline points="${seriesCoords.join(" ")}" fill="none" stroke="${chartColor(series.code)}" stroke-width="2.2" vector-effect="non-scaling-stroke" />
+      <text x="${width - padX - 190}" y="${series.code === "510300.SH" ? 42 : 62}" fill="${chartColor(series.code)}">${label}</text>
+    `;
+  }).join("");
   el.innerHTML = `
     <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
-      <line x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}" stroke="#d9dee7" />
-      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" stroke="#d9dee7" />
-      <polyline points="${coords.join(" ")}" fill="none" stroke="#0f766e" stroke-width="3" vector-effect="non-scaling-stroke" />
+      <line x1="${padX}" y1="${height - padBottom}" x2="${width - padX}" y2="${height - padBottom}" stroke="#d9dee7" />
+      <line x1="${padX}" y1="${padTop}" x2="${padX}" y2="${height - padBottom}" stroke="#d9dee7" />
+      ${ticks}
+      ${benchmarkLines}
+      <polyline points="${coords.join(" ")}" fill="none" stroke="${chartColor("shadow")}" stroke-width="3" vector-effect="non-scaling-stroke" />
       <circle cx="${coords[coords.length - 1].split(",")[0]}" cy="${coords[coords.length - 1].split(",")[1]}" r="4" fill="#0f766e" />
-      <text x="${pad}" y="22" fill="#667085">最高 ${fmtNav(max)} / 最低 ${fmtNav(min)}</text>
-      <text x="${width - pad - 160}" y="22" fill="#17202a">${last.basis_date}  ${fmtNav(last.nav)}</text>
+      <text x="${padX}" y="22" fill="#667085">归一化对比：影子净值 / ETF收盘价</text>
+      <text x="${width - padX - 190}" y="22" fill="${chartColor("shadow")}">影子 ${last.basis_date} ${fmtNav(last.nav)}</text>
     </svg>
   `;
 }
@@ -245,22 +310,32 @@ function renderRebalanceHistory(history) {
 }
 
 function renderSleeveSummary(summary, defensiveLayers = []) {
-  const entries = ["core", "mainline", "thematic", "defensive"];
+  const baseEntries = [
+    { key: "core", label: sleeveLabels.core, weight: Number(summary?.core || 0) },
+    { key: "mainline", label: sleeveLabels.mainline, weight: Number(summary?.mainline || 0) },
+    { key: "thematic", label: sleeveLabels.thematic, weight: Number(summary?.thematic || 0) },
+  ];
+  const defensiveEntries = (defensiveLayers || [])
+    .filter((row) => Number(row.weight_ratio || 0) > 0)
+    .map((row) => ({
+      key: row.key,
+      label: row.label,
+      weight: Number(row.weight_ratio || 0),
+    }));
+  const entries = defensiveEntries.length
+    ? [...baseEntries, ...defensiveEntries]
+    : [...baseEntries, { key: "defensive", label: sleeveLabels.defensive, weight: Number(summary?.defensive || 0) }];
   const compact = window.innerWidth <= 560;
   const minColumn = compact ? 52 : 78;
   const columns = entries
-    .map((key) => `minmax(${minColumn}px, ${Math.max(Number(summary?.[key] || 0), 1)}fr)`)
+    .map((row) => `minmax(${minColumn}px, ${Math.max(row.weight, 1)}fr)`)
     .join(" ");
   const el = byId("sleeveSummary");
   el.style.gridTemplateColumns = columns;
-  const defensiveText = (defensiveLayers || [])
-    .map((row) => `${row.label}${fmtPct(row.weight_ratio || 0, 1)}`)
-    .join(" / ");
-  el.innerHTML = entries.map((key) => `
-    <div class="sleeve-item sleeve-${key}" title="${sleeveLabels[key]} ${fmtPct(summary?.[key] || 0, 1)}${key === "defensive" && defensiveText ? `：${defensiveText}` : ""}">
-      <span>${compact ? sleeveShortLabels[key] : sleeveLabels[key]}</span>
-      <strong>${fmtPct(summary?.[key] || 0, 1)}</strong>
-      ${key === "defensive" && defensiveText ? `<small>${escapeHtml(defensiveText)}</small>` : ""}
+  el.innerHTML = entries.map((row) => `
+    <div class="sleeve-item sleeve-${row.key}" title="${escapeHtml(row.label)} ${fmtPct(row.weight, 1)}">
+      <span>${compact ? sleeveShortLabels[row.key] || row.label : row.label}</span>
+      <strong>${fmtPct(row.weight, 1)}</strong>
     </div>
   `).join("");
 }
@@ -414,7 +489,7 @@ function renderSources(rows, optionalPolicy = {}) {
 function render(data) {
   state.latest = data;
   renderMetrics(data);
-  renderNavChart(data.nav_curve || []);
+  renderNavChart(data.nav_curve || [], data.benchmark_curve || []);
   renderSleeveSummary(data.sleeve_summary || {}, data.defensive_layers || []);
   renderMarketConstraints(data.market_constraints || {});
   renderEtfGate(data.etf_gate_summary || {}, data.etf_gate || []);

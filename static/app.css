@@ -238,7 +238,7 @@ main {
 
 .chart {
   width: 100%;
-  height: 260px;
+  height: 300px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: linear-gradient(180deg, #ffffff, #f8fbfb);
@@ -298,18 +298,32 @@ main {
 
 .sleeve-core {
   border-left: 4px solid #2563eb;
+  background: #f4f8ff;
 }
 
 .sleeve-mainline {
   border-left: 4px solid #0f766e;
+  background: #f0fdfa;
 }
 
 .sleeve-thematic {
   border-left: 4px solid #7c3aed;
+  background: #f7f3ff;
 }
 
 .sleeve-defensive {
   border-left: 4px solid #b7791f;
+  background: #fff8ed;
+}
+
+.sleeve-defensive_quality {
+  border-left: 4px solid #b7791f;
+  background: #fff8ed;
+}
+
+.sleeve-cash_like {
+  border-left: 4px solid #64748b;
+  background: #f6f8fb;
 }
 
 .gate-summary {

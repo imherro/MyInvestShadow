@@ -12,7 +12,13 @@ from .allocator import (
     sleeve_summary,
 )
 from .db import connect, dumps, init_db, loads, row_to_dict, rows_to_dicts
-from .pricing import PricePoint, combined_price_fallback, fetch_tushare_prices, merge_price_maps
+from .pricing import (
+    PricePoint,
+    combined_price_fallback,
+    fetch_tushare_close_series,
+    fetch_tushare_prices,
+    merge_price_maps,
+)
 from .upstream import (
     SourceSnapshot,
     extract_market_basis,
@@ -482,12 +488,14 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
 
         conn.commit()
         run = latest_run(conn) or {}
+        nav_points = nav_curve(conn)
         return {
             "run": run,
             "run_payload": loads(run["payload_json"]) if run else None,
             "allocations": _allocations_for_run(conn, run_id),
             "sleeve_summary": summary,
-            "nav_curve": nav_curve(conn),
+            "nav_curve": nav_points,
+            "benchmark_curve": benchmark_curve(conn, nav_points),
             "source_status": source_status(conn),
         }
 
@@ -504,6 +512,115 @@ def nav_curve(conn: Any | None = None) -> list[dict[str, Any]]:
             """
         ).fetchall()
         return rows_to_dicts(rows)
+    finally:
+        if should_close:
+            conn.close()
+
+
+BENCHMARK_ETFS = {
+    "510300.SH": "华泰柏瑞沪深300ETF",
+    "510500.SH": "南方中证500ETF",
+}
+
+
+def _stored_benchmark_closes(
+    conn: Any, codes: list[str]
+) -> dict[str, dict[str, dict[str, Any]]]:
+    placeholders = ",".join("?" for _ in codes)
+    rows = conn.execute(
+        f"""
+        SELECT n.basis_date, a.code, a.name, a.price
+        FROM nav_points n
+        JOIN target_allocations a ON a.run_id = n.run_id
+        WHERE a.code IN ({placeholders})
+          AND a.price IS NOT NULL
+        ORDER BY n.basis_date ASC
+        """,
+        tuple(codes),
+    ).fetchall()
+    result: dict[str, dict[str, dict[str, Any]]] = {code: {} for code in codes}
+    for row in rows:
+        result.setdefault(row["code"], {})[row["basis_date"]] = {
+            "close": float(row["price"]),
+            "name": row["name"] or BENCHMARK_ETFS.get(row["code"], row["code"]),
+            "source": "target_allocations.price",
+        }
+    return result
+
+
+def benchmark_curve(
+    conn: Any | None = None, points: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    should_close = conn is None
+    conn = conn or connect()
+    try:
+        nav_points = points if points is not None else nav_curve(conn)
+        dates = [str(row.get("basis_date") or "") for row in nav_points if row.get("basis_date")]
+        if not dates:
+            return []
+        codes = list(BENCHMARK_ETFS)
+        closes = _stored_benchmark_closes(conn, codes)
+        missing_dates = sorted(
+            {
+                basis_date
+                for basis_date in dates
+                for code in codes
+                if basis_date not in closes.get(code, {})
+            }
+        )
+        if missing_dates:
+            remote = fetch_tushare_close_series(codes, missing_dates)
+            for code, by_date in remote.items():
+                for basis_date, point in by_date.items():
+                    if not basis_date or basis_date not in missing_dates or point.close is None:
+                        continue
+                    closes.setdefault(code, {}).setdefault(
+                        basis_date,
+                        {
+                            "close": point.close,
+                            "name": BENCHMARK_ETFS.get(code, code),
+                            "source": point.source,
+                        },
+                    )
+
+        series: list[dict[str, Any]] = []
+        for code in codes:
+            base_close: float | None = None
+            rows: list[dict[str, Any]] = []
+            for basis_date in dates:
+                item = closes.get(code, {}).get(basis_date) or {}
+                close = item.get("close")
+                close_number = float(close) if close is not None else None
+                if close_number is not None and base_close is None:
+                    base_close = close_number
+                rows.append(
+                    {
+                        "basis_date": basis_date,
+                        "close": close_number,
+                        "normalized": (
+                            close_number / base_close
+                            if close_number is not None and base_close not in (None, 0)
+                            else None
+                        ),
+                        "source": item.get("source"),
+                    }
+                )
+            series.append(
+                {
+                    "code": code,
+                    "name": next(
+                        (
+                            item.get("name")
+                            for item in closes.get(code, {}).values()
+                            if item.get("name")
+                        ),
+                        BENCHMARK_ETFS[code],
+                    ),
+                    "base_close": base_close,
+                    "points": rows,
+                }
+            )
+        return series
     finally:
         if should_close:
             conn.close()
@@ -679,6 +796,7 @@ def latest_state() -> dict[str, Any]:
         run_payload = loads(run["payload_json"]) if run else None
         decision_trace = (run_payload or {}).get("decision_trace") or {}
         allocations = _allocations_for_run(conn, int(run["id"]) if run else None)
+        nav_points = nav_curve(conn)
         return {
             "run": run,
             "run_payload": run_payload,
@@ -689,7 +807,8 @@ def latest_state() -> dict[str, Any]:
             or {},
             "etf_gate_summary": decision_trace.get("etf_gate_summary") or {},
             "etf_gate": decision_trace.get("etf_gate") or [],
-            "nav_curve": nav_curve(conn),
+            "nav_curve": nav_points,
+            "benchmark_curve": benchmark_curve(conn, nav_points),
             "rebalance_history": rebalance_history(conn),
             "source_status": source_status(conn),
         }
@@ -800,6 +919,7 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
         "stock_gate": decision_trace.get("stock_gate") or [],
         "defensive_quality_gate": decision_trace.get("defensive_quality_gate") or [],
         "nav_curve": state.get("nav_curve") or [],
+        "benchmark_curve": state.get("benchmark_curve") or [],
         "allocations": allocations,
         "rebalance_history": state.get("rebalance_history") or [],
         "source_status": state.get("source_status") or [],

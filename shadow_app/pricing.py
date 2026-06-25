@@ -131,6 +131,76 @@ def fetch_tushare_prices(codes: list[str], basis_date: str) -> dict[str, PricePo
     return synthetic | {code: _fetch_tushare_one(pro, code, trade_date) for code in market_codes}
 
 
+def _compact_to_iso_date(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    compact = text.replace("-", "")
+    if len(compact) != 8 or not compact.isdigit():
+        return None
+    return f"{compact[:4]}-{compact[4:6]}-{compact[6:]}"
+
+
+def _fetch_tushare_history_one(
+    pro: Any, code: str, start_date: str, end_date: str
+) -> dict[str, PricePoint]:
+    methods = ("fund_daily", "daily") if code.endswith((".SH", ".SZ", ".BJ")) else ("daily",)
+    result: dict[str, PricePoint] = {}
+    last_error: str | None = None
+    for method_name in methods:
+        try:
+            method = getattr(pro, method_name)
+            df = method(ts_code=code, start_date=start_date, end_date=end_date)
+            if df is None or df.empty:
+                continue
+            for _, row in df.iterrows():
+                basis_date = _compact_to_iso_date(row.get("trade_date"))
+                if not basis_date:
+                    continue
+                result[basis_date] = PricePoint(
+                    code=code,
+                    close=_safe_float(row.get("close")),
+                    pct_chg=_safe_float(row.get("pct_chg")),
+                    source=f"Tushare.{method_name}",
+                    amount=_safe_float(row.get("amount")),
+                )
+            if result:
+                return result
+        except Exception as exc:  # pragma: no cover - depends on local Tushare state
+            last_error = f"{type(exc).__name__}: {exc}"
+    if last_error:
+        return {
+            "": PricePoint(code=code, close=None, pct_chg=None, source="Tushare", error=last_error)
+        }
+    return {}
+
+
+def fetch_tushare_close_series(
+    codes: list[str], basis_dates: list[str]
+) -> dict[str, dict[str, PricePoint]]:
+    market_codes = [code for code in codes if MARKET_CODE_RE.match(code)]
+    compact_dates = sorted({_trade_date_compact(date) for date in basis_dates if date})
+    if not market_codes or not compact_dates:
+        return {}
+    token = get_tushare_token()
+    if not token:
+        return {}
+    try:
+        import tushare as ts
+
+        ts.set_token(token)
+        pro = ts.pro_api(token)
+    except Exception:  # pragma: no cover - depends on installed runtime
+        return {}
+
+    start_date = compact_dates[0]
+    end_date = compact_dates[-1]
+    return {
+        code: _fetch_tushare_history_one(pro, code, start_date, end_date)
+        for code in market_codes
+    }
+
+
 def theme_price_fallback(theme_payload: dict[str, Any]) -> dict[str, PricePoint]:
     latest = theme_payload.get("latest_result") or {}
     result: dict[str, PricePoint] = {}
