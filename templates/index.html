@@ -4,9 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MyInvestShadow</title>
-    <link rel="stylesheet" href="/static/app.css?v=20260624-etf-upstream" />
+    <link rel="stylesheet" href="/static/app.css?v=20260625-unified-chrome" />
   </head>
   <body>
+    <div data-myinvest-header></div>
+
     <header class="topbar">
       <div>
         <h1>MyInvestShadow</h1>
@@ -146,8 +148,10 @@
       </section>
     </main>
 
+    <div data-myinvest-footer></div>
     <div id="toast" class="toast" hidden></div>
-    <script src="/static/app.js?v=20260624-etf-upstream"></script>
-    <script src="https://invest.okbbc.com/footer.js" defer></script>
+    <script src="https://invest.okbbc.com/header.js" data-target="[data-myinvest-header]" defer></script>
+    <script src="/static/app.js?v=20260625-unified-chrome"></script>
+    <script src="https://invest.okbbc.com/footer.js" data-target="[data-myinvest-footer]" defer></script>
   </body>
 </html>
