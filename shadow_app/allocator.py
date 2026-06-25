@@ -174,6 +174,46 @@ def _complete_market_sleeve_mix(record: dict[str, Any]) -> dict[str, float] | No
     }
 
 
+def _sleeve_allocation_entries(record: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = record.get("sleeve_allocation")
+    if not isinstance(raw, list):
+        raw = (record.get("allocation_policy") or {}).get("sleeves")
+    return [row for row in (raw or []) if isinstance(row, dict)]
+
+
+def _sleeve_entry_midpoint(entry: dict[str, Any] | None) -> float | None:
+    if not entry:
+        return None
+    midpoint = entry.get("midpoint")
+    try:
+        if midpoint is not None:
+            return clamp(float(midpoint), 0.0, 100.0)
+    except (TypeError, ValueError):
+        pass
+    return parse_percent_range(str(entry.get("target_range") or ""))
+
+
+def _complete_market_sleeve_allocation(record: dict[str, Any]) -> dict[str, float] | None:
+    entries = _sleeve_allocation_entries(record)
+    if not entries:
+        return None
+    by_key = {str(row.get("key") or ""): row for row in entries}
+    core = _sleeve_entry_midpoint(by_key.get("core_wide_etf"))
+    mainline = _sleeve_entry_midpoint(by_key.get("mainline_etf"))
+    leader_alpha = _sleeve_entry_midpoint(by_key.get("leader_alpha")) or 0.0
+    if core is None or mainline is None:
+        return None
+    active = core + mainline + leader_alpha
+    if active > 100.0:
+        return None
+    return {
+        "core": core,
+        "mainline": mainline,
+        "thematic": leader_alpha,
+        "defensive": max(0.0, 100.0 - active),
+    }
+
+
 def _scale_active_sleeves(
     sleeves: dict[str, float], target_active: float
 ) -> dict[str, float]:
@@ -204,6 +244,7 @@ def _position_sizing_from_market(market_payload: dict[str, Any]) -> dict[str, An
     regime = _regime_value(record)
     range_text = _official_equity_position_range(record)
     range_bounds = parse_percent_range_bounds(range_text)
+    official_sleeves = _complete_market_sleeve_allocation(record)
     market_sleeves = _complete_market_sleeve_mix(record)
     fallback_sizing = compute_target_position(score_value, confidence, regime)
     fallback_position = float(fallback_sizing["final_position"])
@@ -213,7 +254,13 @@ def _position_sizing_from_market(market_payload: dict[str, Any]) -> dict[str, An
     range_clamped = False
     sleeve_mix_active: float | None = None
 
-    if market_sleeves is not None:
+    if official_sleeves is not None:
+        sleeve_mix_active = (
+            official_sleeves["core"] + official_sleeves["mainline"] + official_sleeves["thematic"]
+        ) / 100.0
+        final_position = sleeve_mix_active
+        source = "market.sleeve_allocation"
+    elif market_sleeves is not None:
         sleeve_mix_active = (
             market_sleeves["core"] + market_sleeves["mainline"] + market_sleeves["thematic"]
         ) / 100.0
@@ -262,7 +309,18 @@ def sleeve_targets_from_market(market_payload: dict[str, Any]) -> dict[str, floa
     active_ratio = float(sizing["final_position"]) * 100.0
     record = market_record(market_payload)
     score_value = _market_score_value(record)
+    official_sleeves = _complete_market_sleeve_allocation(record)
     market_sleeves = _complete_market_sleeve_mix(record)
+    if official_sleeves is not None:
+        active = sum(float(official_sleeves[key]) for key in ("core", "mainline", "thematic"))
+        if abs(active - active_ratio) > 1e-6:
+            return _scale_active_sleeves(official_sleeves, active_ratio)
+        return {
+            "core": official_sleeves["core"],
+            "mainline": official_sleeves["mainline"],
+            "thematic": official_sleeves["thematic"],
+            "defensive": max(0.0, 100.0 - active),
+        }
     if market_sleeves is not None:
         active = sum(float(market_sleeves[key]) for key in ("core", "mainline", "thematic"))
         if abs(active - active_ratio) > 1e-6:
@@ -313,11 +371,12 @@ def allocation_policy_from_market(
     range_violation = False
     if low is not None and high is not None:
         range_violation = active < low - 1e-6 or active > high + 1e-6
-    sleeve_source = (
-        "market.sleeve_mix"
-        if _complete_market_sleeve_mix(record) is not None
-        else "shadow_fallback_score_bands"
-    )
+    if _complete_market_sleeve_allocation(record) is not None:
+        sleeve_source = "market.sleeve_allocation"
+    elif _complete_market_sleeve_mix(record) is not None:
+        sleeve_source = "market.sleeve_mix"
+    else:
+        sleeve_source = "shadow_fallback_score_bands"
     return {
         "position_source": components.get("source"),
         "sleeve_source": sleeve_source,
@@ -328,6 +387,7 @@ def allocation_policy_from_market(
         "target_active_weight_ratio": active,
         "range_clamped": bool(components.get("range_clamped")),
         "range_violation": range_violation,
+        "raw_sleeve_allocation": _sleeve_allocation_entries(record),
         "raw_sleeve_mix": record.get("sleeve_mix") or {},
         "sleeve_targets": dict(sleeves),
     }
@@ -910,6 +970,12 @@ def _distribute_thematic_budget(
 
 def _defensive_quality_target(defensive_weight: float, market_payload: dict[str, Any]) -> float:
     record = market_record(market_payload)
+    entries = _sleeve_allocation_entries(record)
+    if entries:
+        by_key = {str(row.get("key") or ""): row for row in entries}
+        official_target = _sleeve_entry_midpoint(by_key.get("defensive_quality"))
+        if official_target is not None:
+            return min(defensive_weight, official_target)
     score = _market_score_value(record)
     regime = _regime_value(record)
     if defensive_weight <= 0:
@@ -1034,6 +1100,27 @@ def _distribute_defensive_quality_budget(
         rows.append(row)
     used = sum(float(row["target_weight_ratio"]) for row in rows)
     return rows, max(0.0, budget - used), reviewed
+
+
+def _should_absorb_unallocated_defensively(
+    market_payload: dict[str, Any], allocation_policy: dict[str, Any]
+) -> bool:
+    record = market_record(market_payload)
+    state = str(
+        record.get("allocation_state")
+        or ((record.get("allocation_policy") or {}).get("state"))
+        or record.get("market_regime")
+        or ""
+    )
+    equity_high = allocation_policy.get("equity_range_high")
+    try:
+        high = float(equity_high) if equity_high is not None else None
+    except (TypeError, ValueError):
+        high = None
+    return (
+        allocation_policy.get("sleeve_source") == "market.sleeve_allocation"
+        and ("防守" in state or (_market_score_value(record) < 25.0) or (high is not None and high <= 20.0))
+    )
 
 
 def _stock_theme_score(candidate: dict[str, Any]) -> float:
@@ -1352,6 +1439,9 @@ def allocation_plan(
             "valid_universe_size": valid_universe_size,
         },
         target_active_weight,
+        redistribute_unallocated=not _should_absorb_unallocated_defensively(
+            market_payload, allocation_policy
+        ),
     )
     guarded_sleeves = structure_guard["allocation"]
     rows.extend(_core_etf_rows(guarded_sleeves["core"], price_map, market_payload))

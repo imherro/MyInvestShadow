@@ -49,6 +49,12 @@ def test_build_index_payload_is_homepage_focused() -> None:
         ],
         "run_payload": {
             "optional_source_policy": {"etf_used": True, "stock_used": False},
+            "market_constraints": {
+                "allocation_state": "防守期",
+                "market_position_score": 19.95,
+                "equity_position_range": "0%-20%",
+                "risk_caps": [{"reason": "strong_index_weak_breadth"}],
+            },
             "decision_trace": {
                 "etf_gate_summary": {"reviewed_count": 1, "selected_count": 1},
                 "etf_gate": [{"code": "588170.SH", "grade": "A"}],
@@ -78,6 +84,8 @@ def test_build_index_payload_is_homepage_focused() -> None:
         {"key": "cash_like", "label": "现金防御", "weight_ratio": 44.0},
     ]
     assert payload["optional_source_policy"]["etf_used"] is True
+    assert payload["market_constraints"]["allocation_state"] == "防守期"
+    assert payload["market_constraints"]["risk_caps"][0]["reason"] == "strong_index_weak_breadth"
     assert payload["stock_gate"][0]["selected"] is True
     assert payload["defensive_quality_gate"][0]["code"] == "512890.SH"
     assert payload["etf_gate_summary"]["reviewed_count"] == 1

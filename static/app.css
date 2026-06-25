@@ -319,6 +319,53 @@ main {
   margin-bottom: 12px;
 }
 
+.constraint-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(260px, 1.1fr) minmax(260px, 1.1fr);
+  gap: 12px;
+}
+
+.constraint-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcfd;
+}
+
+.constraint-card span {
+  display: block;
+  color: var(--muted);
+}
+
+.constraint-card strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 18px;
+}
+
+.constraint-card p {
+  margin-top: 8px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.constraint-card ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.constraint-card li {
+  margin: 6px 0;
+  color: #344054;
+  line-height: 1.45;
+}
+
+.constraint-card li span {
+  display: inline;
+  color: #344054;
+}
+
 .gate-card {
   min-height: 68px;
   padding: 12px;
@@ -545,6 +592,7 @@ tbody tr:last-child td {
   .metrics,
   .grid,
   .status-list,
+  .constraint-grid,
   .gate-summary {
     grid-template-columns: 1fr;
   }

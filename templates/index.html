@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MyInvestShadow</title>
-    <link rel="stylesheet" href="/static/app.css?v=20260625-unified-chrome" />
+    <link rel="stylesheet" href="/static/app.css?v=20260625-sleeve-constraints" />
   </head>
   <body>
     <div data-myinvest-header></div>
@@ -51,6 +51,14 @@
           <span>核心 / 主线 / 主题 / 防御</span>
         </div>
         <div id="sleeveSummary" class="sleeve-summary"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>市场约束</h2>
+          <span id="constraintCount">--</span>
+        </div>
+        <div id="marketConstraints" class="constraint-grid"></div>
       </section>
 
       <section class="panel">
@@ -151,7 +159,7 @@
     <div data-myinvest-footer></div>
     <div id="toast" class="toast" hidden></div>
     <script src="https://invest.okbbc.com/header.js" data-target="[data-myinvest-header]" defer></script>
-    <script src="/static/app.js?v=20260625-unified-chrome"></script>
+    <script src="/static/app.js?v=20260625-sleeve-constraints"></script>
     <script src="https://invest.okbbc.com/footer.js" data-target="[data-myinvest-footer]" defer></script>
   </body>
 </html>

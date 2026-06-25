@@ -17,6 +17,8 @@ def _round(value: float) -> float:
 def enforce_structure_constraints(
     allocation: dict[str, Any],
     target_position: float,
+    *,
+    redistribute_unallocated: bool = True,
 ) -> dict[str, Any]:
     core = _safe_float(allocation.get("core"))
     mainline = _safe_float(allocation.get("mainline"))
@@ -27,30 +29,38 @@ def enforce_structure_constraints(
     valid_universe_size = int(_safe_float(allocation.get("valid_universe_size")))
 
     safe_mode = False
+    defensive_absorbed = 0.0
     redistributed = {"mainline": 0.0, "thematic": 0.0}
     if unallocated_total > 0.0:
-        recipients = {
-            "mainline": mainline,
-            "thematic": thematic,
-        }
-        recipient_total = sum(value for value in recipients.values() if value > 0.0)
-        if valid_universe_size <= 0 or recipient_total <= 0.0:
-            safe_mode = True
+        if not redistribute_unallocated:
+            defensive_absorbed = unallocated_total
         else:
-            for sleeve, current in recipients.items():
-                if current <= 0.0:
-                    continue
-                addition = unallocated_total * current / recipient_total
-                redistributed[sleeve] = addition
-                if sleeve == "mainline":
-                    mainline += addition
-                else:
-                    thematic += addition
+            recipients = {
+                "mainline": mainline,
+                "thematic": thematic,
+            }
+            recipient_total = sum(value for value in recipients.values() if value > 0.0)
+            if valid_universe_size <= 0 or recipient_total <= 0.0:
+                safe_mode = True
+            else:
+                for sleeve, current in recipients.items():
+                    if current <= 0.0:
+                        continue
+                    addition = unallocated_total * current / recipient_total
+                    redistributed[sleeve] = addition
+                    if sleeve == "mainline":
+                        mainline += addition
+                    else:
+                        thematic += addition
 
     active = core + mainline + thematic
     defensive = max(0.0, 100.0 - active)
     portfolio_total = core + mainline + thematic + defensive
-    active_sum_ok = active <= target + 1e-6 if safe_mode else abs(active - target) <= 1e-6
+    active_sum_ok = (
+        active <= target + 1e-6
+        if safe_mode or not redistribute_unallocated
+        else abs(active - target) <= 1e-6
+    )
     portfolio_sum_ok = abs(portfolio_total - 100.0) <= 1e-6
     violation = not active_sum_ok or not portfolio_sum_ok
 
@@ -71,6 +81,10 @@ def enforce_structure_constraints(
             "safe_mode_triggered": safe_mode,
             "valid_universe_size": valid_universe_size,
             "unallocated_ratio": _round(unallocated_total),
+            "unallocated_policy": (
+                "redistribute" if redistribute_unallocated else "defensive_absorb"
+            ),
+            "defensive_absorbed_ratio": _round(defensive_absorbed),
             "redistributed_ratio": {
                 key: _round(value) for key, value in redistributed.items()
             },

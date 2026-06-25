@@ -7,6 +7,7 @@ from shadow_app.allocator import (
     extract_etf_candidates,
     legacy_core_price_point_from_etfs,
     risk_budget_from_market,
+    sleeve_targets_from_market,
     sleeve_summary,
     target_allocations,
 )
@@ -166,6 +167,123 @@ def test_complete_market_sleeve_mix_drives_position_structure() -> None:
     assert plan["allocation_policy"]["sleeve_source"] == "market.sleeve_mix"
     assert plan["allocation_policy"]["fallback_used"] is False
     assert plan["allocation_policy"]["range_violation"] is False
+
+
+def test_market_sleeve_allocation_takes_priority_over_fallback_structure() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "0%-20%",
+                    "market_position_score": 19.95,
+                    "allocation_state": "防守期",
+                    "sleeve_allocation": [
+                        {"key": "core_wide_etf", "target_range": "0%-15%", "midpoint": 7.5},
+                        {"key": "mainline_etf", "target_range": "0%-5%", "midpoint": 2.5},
+                        {"key": "leader_alpha", "target_range": "0%-0%", "midpoint": 0.0},
+                        {"key": "defensive_quality", "target_range": "20%-40%", "midpoint": 30.0},
+                        {"key": "cash_like", "target_range": "55%-85%", "midpoint": 70.0},
+                    ],
+                }
+            }
+        }
+    }
+
+    assert sleeve_targets_from_market(market_payload) == {
+        "core": 7.5,
+        "mainline": 2.5,
+        "thematic": 0.0,
+        "defensive": 90.0,
+    }
+    assert risk_budget_from_market(market_payload) == 10.0
+
+    theme_payload = {
+        "theme_signals": [
+            {
+                "rank": 1,
+                "theme": "硬科技电子/半导体",
+                "stage": "主线确认",
+                "score_weight_ratio": 95,
+                "evidence_score": 95,
+                "top_etf": "588200.SH 芯片ETF",
+            }
+        ]
+    }
+    price_map = {
+        "588200.SH": PricePoint("588200.SH", 1.0, 2.0, "test", amount=900_000, r5=8.0, r20=15.0, premium_rate=0.1),
+        "512890.SH": PricePoint("512890.SH", 1.0, 0.4, "test", amount=800_000, r5=1.0, r20=3.0, premium_rate=0.1),
+        "159201.SZ": PricePoint("159201.SZ", 1.0, 0.3, "test", amount=500_000, r5=0.5, r20=2.0, premium_rate=0.1),
+    }
+
+    plan = allocation_plan(market_payload, theme_payload, price_map)
+    summary = sleeve_summary(plan["targets"])
+
+    assert plan["allocation_policy"]["position_source"] == "market.sleeve_allocation"
+    assert plan["allocation_policy"]["sleeve_source"] == "market.sleeve_allocation"
+    assert round(summary["core"], 4) == 7.5
+    assert round(summary["mainline"], 4) == 2.5
+    assert round(summary["defensive"], 4) == 90.0
+    assert plan["gate_universe_audit"]["defensive_quality_selected_count"] == 2
+    quality_weight = sum(
+        row["target_weight_ratio"]
+        for row in plan["targets"]
+        if (row.get("etf_gate_components") or {}).get("defensive_layer") == "quality"
+    )
+    assert round(quality_weight, 4) == 30.0
+
+
+def test_defensive_market_absorbs_unallocated_thematic_budget() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "0%-20%",
+                    "market_position_score": 19.95,
+                    "allocation_state": "防守期",
+                    "sleeve_allocation": [
+                        {"key": "core_wide_etf", "target_range": "0%-15%", "midpoint": 7.5},
+                        {"key": "mainline_etf", "target_range": "0%-5%", "midpoint": 2.5},
+                        {"key": "leader_alpha", "target_range": "0%-4%", "midpoint": 2.0},
+                        {"key": "defensive_quality", "target_range": "20%-40%", "midpoint": 30.0},
+                        {"key": "cash_like", "target_range": "55%-85%", "midpoint": 70.0},
+                    ],
+                }
+            }
+        }
+    }
+    theme_payload = {
+        "theme_signals": [
+            {
+                "rank": 1,
+                "theme": "硬科技电子/半导体",
+                "stage": "主线确认",
+                "score_weight_ratio": 95,
+                "evidence_score": 95,
+                "top_etf": "588200.SH 芯片ETF",
+            },
+            {
+                "rank": 2,
+                "theme": "观察方向",
+                "stage": "观察线",
+                "score_weight_ratio": 90,
+                "evidence_score": 90,
+                "top_etf": "562500.SH 机器人ETF",
+            },
+        ]
+    }
+    price_map = {
+        "588200.SH": PricePoint("588200.SH", 1.0, 2.0, "test", amount=900_000, r5=8.0, r20=15.0, premium_rate=0.1),
+    }
+
+    plan = allocation_plan(market_payload, theme_payload, price_map)
+    summary = sleeve_summary(plan["targets"])
+
+    assert round(plan["market_risk_budget_ratio"], 4) == 12.0
+    assert round(plan["risk_budget_ratio"], 4) == 10.0
+    assert round(summary["mainline"], 4) == 2.5
+    assert round(summary["defensive"], 4) == 90.0
+    assert plan["structure_guard_report"]["unallocated_policy"] == "defensive_absorb"
+    assert round(plan["structure_guard_report"]["defensive_absorbed_ratio"], 4) == 2.0
 
 
 def test_target_allocations_use_four_sleeves() -> None:

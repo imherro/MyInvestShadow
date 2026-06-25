@@ -75,11 +75,20 @@ http://127.0.0.1:8013
 
 优先级：
 
-1. 如果市场结果提供完整 `sleeve_mix`，直接使用各仓位层区间中位数。
-2. 如果只有 `equity_position_range`，旧分数仓位只作为区间内取点依据，最终仓位必须落在该区间内。
-3. 如果市场结果缺少官方仓位区间，才使用 `portfolio/position_sizer.py` 中的旧分数分档 fallback。
+1. 如果市场结果提供 `sleeve_allocation`，优先使用市场研究给出的五仓结构区间中位数。
+2. 如果没有 `sleeve_allocation`，但提供完整 `sleeve_mix`，使用旧四仓结构区间中位数。
+3. 如果只有 `equity_position_range`，旧分数仓位只作为区间内取点依据，最终仓位必须落在该区间内。
+4. 如果市场结果缺少官方仓位区间，才使用 `portfolio/position_sizer.py` 中的旧分数分档 fallback。
 
-`sleeve_mix` 映射：
+`sleeve_allocation` 映射：
+
+- `core_wide_etf` -> 核心仓位
+- `mainline_etf` -> 主线仓位
+- `leader_alpha` -> 主题/龙头弹性仓位
+- `defensive_quality` -> 收益防御仓位
+- `cash_like` -> 现金防御仓位
+
+旧 `sleeve_mix` 映射：
 
 - `sleeve_mix.core` -> 核心仓位
 - `sleeve_mix.offensive` 或 `sleeve_mix.mainline` -> 主线仓位
@@ -88,13 +97,15 @@ http://127.0.0.1:8013
 
 如果 `sleeve_mix` 不完整，例如只提供 `thematic` 上限，则不接管全部结构；系统只把该字段作为主题上限，其他结构进入 fallback。防御仓位等于 `100% - 实际主动仓位`；门禁过滤造成的主线/主题缺口由结构守恒模块处理，不允许自动回补核心 ETF。
 
+当市场研究处于防守期，或官方仓位区间上限不超过 20%，未落地的主线/主题预算直接回到防御仓，不再强行补给主线。这是为了遵守“指数强但宽度弱”场景下的市场风险约束。
+
 `/api/latest` 和 `/api/index` 会输出 `allocation_policy`，用于审计：
 
-- `position_source`：总仓位来自 `market.sleeve_mix`、`market.equity_position_range` 还是 fallback
-- `sleeve_source`：仓位层结构来自 `market.sleeve_mix` 还是 fallback
+- `position_source`：总仓位来自 `market.sleeve_allocation`、`market.sleeve_mix`、`market.equity_position_range` 还是 fallback
+- `sleeve_source`：仓位层结构来自 `market.sleeve_allocation`、`market.sleeve_mix` 还是 fallback
 - `fallback_used`：是否因为上游缺少官方仓位字段而使用旧分档
 - `equity_position_range`、`target_active_weight_ratio`、`range_violation`
-- `raw_sleeve_mix` 和最终 `sleeve_targets`
+- `raw_sleeve_allocation`、`raw_sleeve_mix` 和最终 `sleeve_targets`
 
 ## 主线仓位规则
 
@@ -226,6 +237,7 @@ http://127.0.0.1:8013
 - 非 safe mode 下，主动仓位应等于 position sizer 给出的目标主动仓位
 - core 只使用自己的基础预算，不吸收主线或主题失败预算
 - 主线/主题未分配预算优先在已有有效非核心 ETF 池内按比例重分配
+- 防守期或官方仓位上限很低时，主线/主题未分配预算直接进入防御仓
 - 如果有效非核心 ETF 池为空，进入 safe mode：不回补 core，主动仓位收缩，防御仓位提高
 
 结构守恒报告会输出：
@@ -236,6 +248,8 @@ http://127.0.0.1:8013
     "active_sum_check": True,
     "violation": False,
     "safe_mode_triggered": False,
+    "unallocated_policy": "redistribute",
+    "defensive_absorbed_ratio": 0.0,
 }
 ```
 
@@ -386,7 +400,9 @@ python -m pytest -q
 
 - 主线/主题仓位拆分
 - 主线 `mainline_ranking` 周期阶段映射
+- 市场 `sleeve_allocation` 五仓结构优先级
 - 市场 `equity_position_range` 和完整 `sleeve_mix` 驱动仓位
+- 防守期未落地预算回防御
 - MyInvestETF 同方向候选补充、门禁参考和收益防御仓拆层
 - MyInvestStock 同日龙头弹性仓和缺失回退
 - 系统稳定性：regime sweep、ETF universe collapse、signal noise、100 次确定性重复

@@ -323,6 +323,46 @@ function renderEtfGate(summary, rows) {
   }).join("");
 }
 
+function renderMarketConstraints(constraints) {
+  const el = byId("marketConstraints");
+  const caps = constraints?.risk_caps || [];
+  const keyConstraints = constraints?.key_constraints || [];
+  byId("constraintCount").textContent = caps.length ? `${caps.length} 个风险上限` : "暂无风险上限";
+  if (!constraints || !Object.keys(constraints).length) {
+    el.innerHTML = `<div class="status-item">暂无市场约束</div>`;
+    return;
+  }
+  const scoreLine = [
+    `仓位分 ${constraints.market_position_score ?? "--"}`,
+    `机会分 ${constraints.market_opportunity_score ?? "--"}`,
+    `拥挤惩罚 ${constraints.crowding_penalty ?? "--"}`,
+  ].join(" / ");
+  const capHtml = caps.slice(0, 5).map((row) => `
+    <li>
+      <strong>${escapeHtml(row.reason || "--")}</strong>
+      <span>${escapeHtml(row.message || row.severity || "")}</span>
+    </li>
+  `).join("");
+  const constraintHtml = keyConstraints.slice(0, 3).map((item) => `
+    <li>${escapeHtml(item)}</li>
+  `).join("");
+  el.innerHTML = `
+    <div class="constraint-card">
+      <span>市场状态</span>
+      <strong>${escapeHtml(constraints.allocation_state || "--")}</strong>
+      <p>${escapeHtml(scoreLine)}<br>官方仓位：${escapeHtml(constraints.equity_position_range || "--")}</p>
+    </div>
+    <div class="constraint-card">
+      <span>风险上限</span>
+      <ul>${capHtml || "<li>无</li>"}</ul>
+    </div>
+    <div class="constraint-card">
+      <span>关键约束</span>
+      <ul>${constraintHtml || "<li>无</li>"}</ul>
+    </div>
+  `;
+}
+
 function renderAllocationPolicy(policy) {
   const el = byId("policyStatus");
   if (!policy || !Object.keys(policy).length) {
@@ -376,6 +416,7 @@ function render(data) {
   renderMetrics(data);
   renderNavChart(data.nav_curve || []);
   renderSleeveSummary(data.sleeve_summary || {}, data.defensive_layers || []);
+  renderMarketConstraints(data.market_constraints || {});
   renderEtfGate(data.etf_gate_summary || {}, data.etf_gate || []);
   renderAllocations(data.allocations || []);
   renderRebalanceHistory(data.rebalance_history || []);

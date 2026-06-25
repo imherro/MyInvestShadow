@@ -197,6 +197,46 @@ def _daily_return_from_previous_allocations(
     return total
 
 
+def _market_constraints(record: dict[str, Any]) -> dict[str, Any]:
+    allocation_policy = record.get("allocation_policy") or {}
+    decision_explain = record.get("decision_explain") or {}
+    modules = record.get("modules") or {}
+    return {
+        "market_position_score": record.get("market_position_score"),
+        "market_opportunity_score": record.get("market_opportunity_score")
+        or record.get("opportunity_score"),
+        "crowding_penalty": record.get("crowding_penalty"),
+        "equity_position_range": record.get("equity_position_range"),
+        "allocation_state": record.get("allocation_state") or allocation_policy.get("state"),
+        "risk_discount": record.get("risk_discount"),
+        "risk_caps": [
+            {
+                "reason": row.get("reason"),
+                "severity": row.get("severity"),
+                "message": row.get("message"),
+            }
+            for row in (record.get("risk_caps") or [])
+            if isinstance(row, dict)
+        ],
+        "key_constraints": record.get("key_constraints") or [],
+        "decision_explain": {
+            "why_position_changed": decision_explain.get("why_position_changed") or [],
+            "risk_factors": decision_explain.get("risk_factors") or [],
+            "trend_factors": decision_explain.get("trend_factors") or [],
+            "regime_factors": decision_explain.get("regime_factors") or [],
+        },
+        "module_scores": {
+            key: {
+                "label": value.get("label"),
+                "score_pct": value.get("score_pct"),
+                "summary": value.get("summary"),
+            }
+            for key, value in modules.items()
+            if isinstance(value, dict)
+        },
+    }
+
+
 def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) -> dict[str, Any]:
     init_db()
     market_snapshot, theme_snapshot = fetch_market_and_theme()
@@ -287,6 +327,7 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
         summary = sleeve_summary(targets)
         cash_ratio = summary["defensive"]
         record = market_record(market_payload)
+        market_constraints = _market_constraints(record)
 
         payload = {
             "market_fetch_ok": market_snapshot.ok,
@@ -315,6 +356,7 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
             "market_risk_budget_ratio": plan["market_risk_budget_ratio"],
             "position_sizing": plan["position_sizing"],
             "allocation_policy": plan["allocation_policy"],
+            "market_constraints": market_constraints,
             "gate_universe_audit": plan["gate_universe_audit"],
             "structure_guard_report": plan["structure_guard_report"],
             "sleeve_targets_before_gate": plan["sleeve_targets_before_gate"],
@@ -323,6 +365,7 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
                 "market_risk_budget_ratio": plan["market_risk_budget_ratio"],
                 "position_sizing": plan["position_sizing"],
                 "allocation_policy": plan["allocation_policy"],
+                "market_constraints": market_constraints,
                 "gate_universe_audit": plan["gate_universe_audit"],
                 "structure_guard_report": plan["structure_guard_report"],
                 "sleeve_targets_before_gate": plan["sleeve_targets_before_gate"],
@@ -662,6 +705,11 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
     etf_gate = state.get("etf_gate") or decision_trace.get("etf_gate") or []
     gate_universe_audit = decision_trace.get("gate_universe_audit") or {}
     structure_guard_report = decision_trace.get("structure_guard_report") or {}
+    market_constraints = (
+        run_payload.get("market_constraints")
+        or decision_trace.get("market_constraints")
+        or {}
+    )
     allocation_policy = (
         state.get("allocation_policy")
         or decision_trace.get("allocation_policy")
@@ -741,6 +789,7 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
         ],
         "sleeve_summary": sleeve_weights,
         "allocation_policy": allocation_policy,
+        "market_constraints": market_constraints,
         "optional_source_policy": run_payload.get("optional_source_policy")
         or decision_trace.get("optional_source_policy")
         or {},

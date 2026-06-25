@@ -48,3 +48,29 @@ def test_structure_guard_safe_mode_reduces_exposure_when_universe_empty() -> Non
     assert result["structure_guard_report"]["active_sum_check"] is True
     assert result["structure_guard_report"]["total_sum_check"] is True
     assert result["structure_guard_report"]["violation"] is False
+
+
+def test_structure_guard_can_absorb_unallocated_into_defensive() -> None:
+    result = enforce_structure_constraints(
+        {
+            "core": 7.5,
+            "mainline": 2.5,
+            "thematic": 0.0,
+            "unallocated": {"thematic": 2.0},
+            "valid_universe_size": 1,
+        },
+        12.0,
+        redistribute_unallocated=False,
+    )
+
+    assert result["allocation"] == {
+        "core": 7.5,
+        "mainline": 2.5,
+        "thematic": 0.0,
+        "defensive": 90.0,
+    }
+    report = result["structure_guard_report"]
+    assert report["unallocated_policy"] == "defensive_absorb"
+    assert report["defensive_absorbed_ratio"] == 2.0
+    assert report["active_sum_check"] is True
+    assert report["violation"] is False
