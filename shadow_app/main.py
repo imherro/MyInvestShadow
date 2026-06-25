@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .api_catalog import public_api_catalog
 from .config import ROOT_DIR, RuntimeConfig
 from .db import init_db
 from .service import (
@@ -138,6 +139,11 @@ def health() -> dict[str, Any]:
         "latest_basis_date": (state.get("run") or {}).get("basis_date"),
         "port": config.port,
     }
+
+
+@app.get("/api")
+def api_catalog(request: Request) -> dict[str, Any]:
+    return public_api_catalog(str(request.base_url))
 
 
 @app.get("/api/latest")

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MyInvestShadow</title>
-    <link rel="stylesheet" href="/static/app.css?v=20260625-nav-benchmarks" />
+    <link rel="stylesheet" href="/static/app.css?v=20260625-api-catalog" />
   </head>
   <body>
     <div data-myinvest-header></div>
@@ -154,12 +154,20 @@
         <div id="policyStatus" class="status-list"></div>
         <div id="sourceStatus" class="status-list"></div>
       </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>接口说明</h2>
+          <span id="apiTotal">--</span>
+        </div>
+        <div id="apiDirectory" class="api-directory"></div>
+      </section>
     </main>
 
     <div data-myinvest-footer></div>
     <div id="toast" class="toast" hidden></div>
     <script src="https://invest.okbbc.com/header.js" data-target="[data-myinvest-header]" defer></script>
-    <script src="/static/app.js?v=20260625-nav-benchmarks"></script>
+    <script src="/static/app.js?v=20260625-api-catalog"></script>
     <script src="https://invest.okbbc.com/footer.js" data-target="[data-myinvest-footer]" defer></script>
   </body>
 </html>

@@ -486,6 +486,46 @@ function renderSources(rows, optionalPolicy = {}) {
   `).join("");
 }
 
+function renderApiDirectory(catalog) {
+  const el = byId("apiDirectory");
+  if (!el) return;
+  if (!catalog || !Object.keys(catalog).length) {
+    byId("apiTotal").textContent = "暂无接口目录";
+    el.innerHTML = `<div class="status-item">暂无接口说明</div>`;
+    return;
+  }
+  byId("apiTotal").textContent = `${Number(catalog.total_endpoints || 0)} 个公开接口`;
+  const recommended = (catalog.recommended_entrypoints || []).map((row) => `
+    <li>
+      <a href="${escapeHtml(row.path)}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.path)}</a>
+      <span>${escapeHtml(row.reason || "")}</span>
+    </li>
+  `).join("");
+  const groups = (catalog.groups || []).map((group) => `
+    <li>
+      <strong>${escapeHtml(group.name || group.key)}</strong>
+      <span>${Number((group.endpoints || []).length)} 个接口</span>
+    </li>
+  `).join("");
+  const safety = (catalog.safety || []).slice(0, 5).map((item) => `
+    <li>${escapeHtml(item)}</li>
+  `).join("");
+  el.innerHTML = `
+    <div class="api-card">
+      <span>推荐入口</span>
+      <ul class="api-list">${recommended || "<li>无</li>"}</ul>
+    </div>
+    <div class="api-card">
+      <span>接口分组</span>
+      <ul class="api-list">${groups || "<li>无</li>"}</ul>
+    </div>
+    <div class="api-card">
+      <span>安全边界</span>
+      <ul class="api-list">${safety || "<li>无</li>"}</ul>
+    </div>
+  `;
+}
+
 function render(data) {
   state.latest = data;
   renderMetrics(data);
@@ -500,8 +540,9 @@ function render(data) {
 }
 
 async function loadState() {
-  const data = await fetchJson("/api/index");
+  const [data, catalog] = await Promise.all([fetchJson("/api/index"), fetchJson("/api")]);
   render(data);
+  renderApiDirectory(catalog);
 }
 
 async function runRefresh() {

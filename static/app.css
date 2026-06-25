@@ -577,6 +577,53 @@ tbody tr:last-child td {
   line-height: 1.4;
 }
 
+.api-directory {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.api-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcfd;
+}
+
+.api-card > span {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+}
+
+.api-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.api-list li {
+  margin: 7px 0;
+  color: #344054;
+  line-height: 1.45;
+}
+
+.api-list a {
+  color: #0b625b;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.api-list a:hover {
+  text-decoration: underline;
+}
+
+.api-list span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
 .positive {
   color: var(--rise);
 }
@@ -607,7 +654,8 @@ tbody tr:last-child td {
   .grid,
   .status-list,
   .constraint-grid,
-  .gate-summary {
+  .gate-summary,
+  .api-directory {
     grid-template-columns: 1fr;
   }
 
