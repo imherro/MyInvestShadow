@@ -88,6 +88,13 @@ http://127.0.0.1:8013
 - `defensive_quality` -> 收益防御仓位
 - `cash_like` -> 现金防御仓位
 
+兼容当前市场接口新键名：
+
+- `beta_core` -> 核心仓位
+- `alpha_active` -> 主线仓位
+- `defensive_factor` -> 收益防御仓位
+- `liquidity` -> 现金防御仓位
+
 旧 `sleeve_mix` 映射：
 
 - `sleeve_mix.core` -> 核心仓位

@@ -232,6 +232,88 @@ def test_market_sleeve_allocation_takes_priority_over_fallback_structure() -> No
     assert round(quality_weight, 4) == 30.0
 
 
+def test_market_sleeve_allocation_accepts_current_key_aliases() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "0%-20%",
+                    "market_position_score": 13.09,
+                    "allocation_state": "防守期",
+                    "sleeve_allocation": [
+                        {"key": "beta_core", "target_range": "0%-8%", "midpoint": 4.0},
+                        {"key": "alpha_active", "target_range": "0%-2%", "midpoint": 1.0},
+                        {"key": "defensive_factor", "target_range": "0%-19%", "midpoint": 9.5},
+                        {"key": "liquidity", "target_range": "80%-100%", "midpoint": 90.0},
+                    ],
+                }
+            }
+        }
+    }
+    etf_payload = {
+        "basis_date": "2026-06-26",
+        "key_results": {
+            "primary_output": {
+                "items": [
+                    {
+                        "code": "512890.SH",
+                        "name": "华泰柏瑞中证红利低波动ETF",
+                        "valuation_model_type": "factor_defensive",
+                        "sleeve_key": "defensive_quality",
+                        "category_key": "红利低波",
+                        "deep_rating": "A",
+                        "deep_score": 88,
+                        "shadow_observation_eligible": True,
+                        "scores": {
+                            "liquidity_score": 80,
+                            "factor_premium_score": 82,
+                            "portfolio_role_score": 86,
+                            "tracking_score": 78,
+                        },
+                    }
+                ]
+            }
+        },
+    }
+    price_map = {
+        "512890.SH": PricePoint(
+            "512890.SH",
+            1.0,
+            0.4,
+            "test",
+            amount=800_000,
+            r5=1.0,
+            r20=3.0,
+            premium_rate=0.1,
+        ),
+    }
+
+    assert sleeve_targets_from_market(market_payload) == {
+        "core": 4.0,
+        "mainline": 1.0,
+        "thematic": 0.0,
+        "defensive": 95.0,
+    }
+
+    plan = allocation_plan(market_payload, {"theme_signals": []}, price_map, etf_payload=etf_payload)
+    quality_weight = sum(
+        row["target_weight_ratio"]
+        for row in plan["targets"]
+        if (row.get("etf_gate_components") or {}).get("defensive_layer") == "quality"
+    )
+
+    assert plan["allocation_policy"]["position_source"] == "market.sleeve_allocation"
+    assert plan["allocation_policy"]["sleeve_source"] == "market.sleeve_allocation"
+    assert plan["sleeve_targets_before_gate"] == {
+        "core": 4.0,
+        "mainline": 1.0,
+        "thematic": 0.0,
+        "defensive": 95.0,
+    }
+    assert round(plan["structure_guard_report"]["defensive_absorbed_ratio"], 4) == 1.0
+    assert round(quality_weight, 4) == 9.5
+
+
 def test_defensive_market_absorbs_unallocated_thematic_budget() -> None:
     market_payload = {
         "results": {

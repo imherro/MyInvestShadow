@@ -193,14 +193,24 @@ def _sleeve_entry_midpoint(entry: dict[str, Any] | None) -> float | None:
     return parse_percent_range(str(entry.get("target_range") or ""))
 
 
+def _sleeve_midpoint_by_key(
+    by_key: dict[str, dict[str, Any]], *keys: str
+) -> float | None:
+    for key in keys:
+        midpoint = _sleeve_entry_midpoint(by_key.get(key))
+        if midpoint is not None:
+            return midpoint
+    return None
+
+
 def _complete_market_sleeve_allocation(record: dict[str, Any]) -> dict[str, float] | None:
     entries = _sleeve_allocation_entries(record)
     if not entries:
         return None
     by_key = {str(row.get("key") or ""): row for row in entries}
-    core = _sleeve_entry_midpoint(by_key.get("core_wide_etf"))
-    mainline = _sleeve_entry_midpoint(by_key.get("mainline_etf"))
-    leader_alpha = _sleeve_entry_midpoint(by_key.get("leader_alpha")) or 0.0
+    core = _sleeve_midpoint_by_key(by_key, "core_wide_etf", "beta_core")
+    mainline = _sleeve_midpoint_by_key(by_key, "mainline_etf", "alpha_active")
+    leader_alpha = _sleeve_midpoint_by_key(by_key, "leader_alpha") or 0.0
     if core is None or mainline is None:
         return None
     active = core + mainline + leader_alpha
@@ -973,7 +983,9 @@ def _defensive_quality_target(defensive_weight: float, market_payload: dict[str,
     entries = _sleeve_allocation_entries(record)
     if entries:
         by_key = {str(row.get("key") or ""): row for row in entries}
-        official_target = _sleeve_entry_midpoint(by_key.get("defensive_quality"))
+        official_target = _sleeve_midpoint_by_key(
+            by_key, "defensive_quality", "defensive_factor"
+        )
         if official_target is not None:
             return min(defensive_weight, official_target)
     score = _market_score_value(record)
