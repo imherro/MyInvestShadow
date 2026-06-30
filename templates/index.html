@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MyInvestShadow</title>
-    <link rel="stylesheet" href="/static/app.css?v=20260625-api-catalog" />
+    <link rel="stylesheet" href="/static/app.css?v=20260630-sortable-allocations" />
   </head>
   <body>
     <div data-myinvest-header></div>
@@ -107,14 +107,14 @@
           <table>
             <thead>
               <tr>
-                <th>标识</th>
-                <th>名称</th>
-                <th>仓位层</th>
-                <th>主题</th>
-                <th>目标</th>
-                <th>调整</th>
-                <th>日涨跌</th>
-                <th>门禁</th>
+                <th><button class="sort-button" type="button" data-allocation-sort="code">标识<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th><button class="sort-button" type="button" data-allocation-sort="name">名称<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th><button class="sort-button" type="button" data-allocation-sort="sleeve">仓位层<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th><button class="sort-button" type="button" data-allocation-sort="theme">主题<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th><button class="sort-button" type="button" data-allocation-sort="target">目标<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th><button class="sort-button" type="button" data-allocation-sort="drift">调整<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th><button class="sort-button" type="button" data-allocation-sort="pct">日涨跌<span class="sort-indicator" aria-hidden="true"></span></button></th>
+                <th><button class="sort-button" type="button" data-allocation-sort="gate">门禁<span class="sort-indicator" aria-hidden="true"></span></button></th>
               </tr>
             </thead>
             <tbody id="allocationRows"></tbody>
@@ -167,7 +167,7 @@
     <div data-myinvest-footer></div>
     <div id="toast" class="toast" hidden></div>
     <script src="https://invest.okbbc.com/header.js" data-target="[data-myinvest-header]" defer></script>
-    <script src="/static/app.js?v=20260625-api-catalog"></script>
+    <script src="/static/app.js?v=20260630-sortable-allocations"></script>
     <script src="https://invest.okbbc.com/footer.js" data-target="[data-myinvest-footer]" defer></script>
   </body>
 </html>

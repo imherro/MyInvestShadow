@@ -1,6 +1,12 @@
 const state = {
   latest: null,
+  allocationSort: {
+    key: null,
+    direction: "asc",
+  },
 };
+
+const collator = new Intl.Collator("zh-CN", { numeric: true, sensitivity: "base" });
 
 const fmtPct = (value, digits = 1) => {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
@@ -237,14 +243,99 @@ function renderNavChart(points, benchmarks = []) {
   `;
 }
 
+const numericAllocationSorts = new Set(["target", "drift", "pct"]);
+const gradeRank = {
+  A: 1,
+  B: 2,
+  C: 3,
+  D: 4,
+};
+
+const allocationSortValue = (row, key) => {
+  if (key === "code") return instrumentCode(row);
+  if (key === "name") return row.name || row.code || "";
+  if (key === "sleeve") return sleeveLabels[row.sleeve] || row.sleeve || "";
+  if (key === "theme") return `${row.theme || ""} ${row.stage || ""}`;
+  if (key === "target") return Number(row.target_weight_ratio);
+  if (key === "drift") return Number(row.drift_ratio);
+  if (key === "pct") return row.pct_chg === null ? null : Number(row.pct_chg);
+  if (key === "gate") {
+    const gate = allocationGate(row);
+    const grade = String(row.etf_gate_grade || "").toUpperCase();
+    return `${gradeRank[grade] || 9} ${gate.text}`;
+  }
+  return "";
+};
+
+function compareAllocationValues(a, b) {
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  return collator.compare(String(a), String(b));
+}
+
+function compareMissingValues(a, b) {
+  const aMissing = a === null || a === undefined || Number.isNaN(a);
+  const bMissing = b === null || b === undefined || Number.isNaN(b);
+  if (aMissing && bMissing) return 0;
+  if (aMissing) return 1;
+  if (bMissing) return -1;
+  return 0;
+}
+
+function sortedAllocations(rows) {
+  const { key, direction } = state.allocationSort;
+  if (!key) return rows;
+  const multiplier = direction === "desc" ? -1 : 1;
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((left, right) => {
+      const leftValue = allocationSortValue(left.row, key);
+      const rightValue = allocationSortValue(right.row, key);
+      const missingComparison = compareMissingValues(leftValue, rightValue);
+      if (missingComparison !== 0) return missingComparison;
+      const comparison = compareAllocationValues(leftValue, rightValue);
+      if (comparison !== 0) return comparison * multiplier;
+      return left.index - right.index;
+    })
+    .map((item) => item.row);
+}
+
+function updateAllocationSortHeaders() {
+  document.querySelectorAll("[data-allocation-sort]").forEach((button) => {
+    const key = button.dataset.allocationSort;
+    const active = key === state.allocationSort.key;
+    const indicator = button.querySelector(".sort-indicator");
+    button.classList.toggle("is-sorted", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+    button.title = active
+      ? `当前${state.allocationSort.direction === "asc" ? "升序" : "降序"}，点击切换`
+      : "点击排序";
+    if (indicator) {
+      indicator.textContent = active
+        ? (state.allocationSort.direction === "asc" ? "↑" : "↓")
+        : "↕";
+    }
+  });
+}
+
+function setAllocationSort(key) {
+  if (state.allocationSort.key === key) {
+    state.allocationSort.direction = state.allocationSort.direction === "asc" ? "desc" : "asc";
+  } else {
+    state.allocationSort.key = key;
+    state.allocationSort.direction = numericAllocationSorts.has(key) ? "desc" : "asc";
+  }
+  renderAllocations(state.latest?.allocations || []);
+}
+
 function renderAllocations(rows) {
   byId("allocationCount").textContent = `${rows.length} 个目标`;
   const tbody = byId("allocationRows");
+  updateAllocationSortHeaders();
   if (!rows.length) {
     tbody.innerHTML = `<tr><td colspan="8">暂无目标仓位</td></tr>`;
     return;
   }
-  tbody.innerHTML = rows.map((row) => {
+  tbody.innerHTML = sortedAllocations(rows).map((row) => {
     const drift = Number(row.drift_ratio || 0);
     const pct = Number(row.pct_chg || 0);
     const driftClass = signClass(drift);
@@ -561,6 +652,9 @@ async function runRefresh() {
 }
 
 byId("refreshBtn").addEventListener("click", runRefresh);
+document.querySelectorAll("[data-allocation-sort]").forEach((button) => {
+  button.addEventListener("click", () => setAllocationSort(button.dataset.allocationSort));
+});
 window.addEventListener("resize", () => {
   if (state.latest) renderSleeveSummary(state.latest.sleeve_summary || {}, state.latest.defensive_layers || []);
 });

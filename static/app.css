@@ -537,6 +537,48 @@ th {
   font-weight: 700;
 }
 
+.sort-button {
+  min-height: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 5px;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.sort-button:hover,
+.sort-button:focus {
+  color: #0b625b;
+  outline: none;
+}
+
+.sort-button:focus-visible {
+  outline: 2px solid rgba(15, 118, 110, 0.28);
+  outline-offset: 3px;
+}
+
+.sort-button.is-sorted {
+  color: #0b625b;
+}
+
+.sort-indicator {
+  min-width: 12px;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.sort-button.is-sorted .sort-indicator {
+  color: #0b625b;
+}
+
 td.theme-cell {
   max-width: 240px;
   white-space: normal;
