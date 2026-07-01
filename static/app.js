@@ -34,6 +34,10 @@ const sleeveLabels = {
   defensive: "防御仓位",
   defensive_quality: "收益防御",
   cash_like: "现金防御",
+  beta_core: "β核心仓",
+  alpha_active: "α主动仓",
+  defensive_factor: "防御因子仓",
+  liquidity: "流动性仓",
   mainline_watch: "主线备选",
   watch: "观察备选",
   candidate: "方向备选",
@@ -45,6 +49,10 @@ const sleeveShortLabels = {
   defensive: "防御",
   defensive_quality: "收益",
   cash_like: "现金",
+  beta_core: "β核心",
+  alpha_active: "α主动",
+  defensive_factor: "防御因子",
+  liquidity: "流动性",
 };
 const actionClass = {
   new: "positive",
@@ -400,35 +408,76 @@ function renderRebalanceHistory(history) {
   }).join("");
 }
 
-function renderSleeveSummary(summary, defensiveLayers = []) {
+function renderSleeveBlocks(elementId, entries) {
+  const el = byId(elementId);
+  if (!el) return;
+  const rows = (entries || []).filter((row) => Number(row.weight_ratio || 0) >= 0);
+  if (!rows.length) {
+    el.innerHTML = `<div class="sleeve-item">暂无结构</div>`;
+    return;
+  }
+  const compact = window.innerWidth <= 560;
+  const minColumn = compact ? 52 : 78;
+  el.style.gridTemplateColumns = rows
+    .map((row) => `minmax(${minColumn}px, ${Math.max(Number(row.weight_ratio || 0), 1)}fr)`)
+    .join(" ");
+  el.innerHTML = rows.map((row) => {
+    const key = row.key || row.raw_key || "unknown";
+    const marketText = row.market_weight_ratio !== undefined
+      ? ` / 市场 ${fmtPct(row.market_weight_ratio, 1)}`
+      : "";
+    const extra = row.unallocated_ratio > 0
+      ? `<small>未落地 ${fmtPct(row.unallocated_ratio, 1)}</small>`
+      : row.temporary_parking_ratio > 0
+        ? `<small>临时承接 ${fmtPct(row.temporary_parking_ratio, 1)}</small>`
+        : "";
+    return `
+      <div class="sleeve-item sleeve-${key}" title="${escapeHtml(row.label || sleeveLabels[key] || key)} ${fmtPct(row.weight_ratio, 1)}${marketText}">
+        <span>${compact ? sleeveShortLabels[key] || row.label || key : row.label || sleeveLabels[key] || key}</span>
+        <strong>${fmtPct(row.weight_ratio, 1)}</strong>
+        ${extra}
+      </div>
+    `;
+  }).join("");
+}
+
+function legacyExecutableRows(summary, defensiveLayers = []) {
   const baseEntries = [
-    { key: "core", label: sleeveLabels.core, weight: Number(summary?.core || 0) },
-    { key: "mainline", label: sleeveLabels.mainline, weight: Number(summary?.mainline || 0) },
-    { key: "thematic", label: sleeveLabels.thematic, weight: Number(summary?.thematic || 0) },
+    { key: "core", label: sleeveLabels.core, weight_ratio: Number(summary?.core || 0) },
+    { key: "mainline", label: sleeveLabels.mainline, weight_ratio: Number(summary?.mainline || 0) },
+    { key: "thematic", label: sleeveLabels.thematic, weight_ratio: Number(summary?.thematic || 0) },
   ];
   const defensiveEntries = (defensiveLayers || [])
     .filter((row) => Number(row.weight_ratio || 0) > 0)
     .map((row) => ({
       key: row.key,
       label: row.label,
-      weight: Number(row.weight_ratio || 0),
+      weight_ratio: Number(row.weight_ratio || 0),
     }));
-  const entries = defensiveEntries.length
+  return defensiveEntries.length
     ? [...baseEntries, ...defensiveEntries]
-    : [...baseEntries, { key: "defensive", label: sleeveLabels.defensive, weight: Number(summary?.defensive || 0) }];
-  const compact = window.innerWidth <= 560;
-  const minColumn = compact ? 52 : 78;
-  const columns = entries
-    .map((row) => `minmax(${minColumn}px, ${Math.max(row.weight, 1)}fr)`)
-    .join(" ");
-  const el = byId("sleeveSummary");
-  el.style.gridTemplateColumns = columns;
-  el.innerHTML = entries.map((row) => `
-    <div class="sleeve-item sleeve-${row.key}" title="${escapeHtml(row.label)} ${fmtPct(row.weight, 1)}">
-      <span>${compact ? sleeveShortLabels[row.key] || row.label : row.label}</span>
-      <strong>${fmtPct(row.weight, 1)}</strong>
-    </div>
-  `).join("");
+    : [...baseEntries, { key: "defensive", label: sleeveLabels.defensive, weight_ratio: Number(summary?.defensive || 0) }];
+}
+
+function renderSleeveSummary(data) {
+  const marketRows = data.market_sleeve_allocation || [];
+  const executable = data.shadow_executable_allocation || {};
+  const executableRows = executable.rows || legacyExecutableRows(
+    data.sleeve_summary || {},
+    data.defensive_layers || [],
+  );
+  renderSleeveBlocks("marketSleeveSummary", marketRows);
+  renderSleeveBlocks("sleeveSummary", executableRows);
+
+  const notice = byId("executionNotice");
+  if (!notice) return;
+  const unallocated = Number(executable.unallocated_alpha_ratio || 0);
+  if (unallocated > 0) {
+    const parking = executable.temporary_parking_sleeve === "liquidity" ? "流动性仓" : executable.temporary_parking_sleeve || "--";
+    notice.innerHTML = `α主动预算未完全落地：未落地 ${fmtPct(unallocated, 2)}，原因：${escapeHtml(executable.unallocated_reason || "门禁后未使用")}，临时承接：${escapeHtml(parking)}。`;
+  } else {
+    notice.innerHTML = "影子落地结构与市场建议结构无未落地 α 主动预算。";
+  }
 }
 
 function renderEtfGate(summary, rows) {
@@ -536,6 +585,7 @@ function renderAllocationPolicy(policy) {
     return;
   }
   const sourceLabels = {
+    "market.sleeve_allocation": "市场建议结构",
     "market.sleeve_mix": "市场仓位结构",
     "market.equity_position_range": "市场仓位区间",
     "shadow_fallback_score_bands": "影子备用规则",
@@ -621,7 +671,7 @@ function render(data) {
   state.latest = data;
   renderMetrics(data);
   renderNavChart(data.nav_curve || [], data.benchmark_curve || []);
-  renderSleeveSummary(data.sleeve_summary || {}, data.defensive_layers || []);
+  renderSleeveSummary(data);
   renderMarketConstraints(data.market_constraints || {});
   renderEtfGate(data.etf_gate_summary || {}, data.etf_gate || []);
   renderAllocations(data.allocations || []);
@@ -656,7 +706,7 @@ document.querySelectorAll("[data-allocation-sort]").forEach((button) => {
   button.addEventListener("click", () => setAllocationSort(button.dataset.allocationSort));
 });
 window.addEventListener("resize", () => {
-  if (state.latest) renderSleeveSummary(state.latest.sleeve_summary || {}, state.latest.defensive_layers || []);
+  if (state.latest) renderSleeveSummary(state.latest);
 });
 
 loadState().catch((error) => showToast(`加载失败：${error.message}`));

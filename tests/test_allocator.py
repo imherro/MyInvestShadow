@@ -314,6 +314,42 @@ def test_market_sleeve_allocation_accepts_current_key_aliases() -> None:
     assert round(quality_weight, 4) == 9.5
 
 
+def test_complete_market_sleeve_allocation_is_not_scaled_by_equity_range_floor() -> None:
+    market_payload = {
+        "results": {
+            "market_score": {
+                "record": {
+                    "equity_position_range": "20%-40%",
+                    "market_position_score": 35.0,
+                    "allocation_state": "高位过热风控",
+                    "sleeve_allocation": [
+                        {"key": "beta_core", "target_range": "9%-15%", "midpoint": 12.0},
+                        {"key": "alpha_active", "target_range": "1%-6%", "midpoint": 3.5},
+                        {"key": "defensive_factor", "target_range": "10%-19%", "midpoint": 14.5},
+                        {"key": "liquidity", "target_range": "60%-80%", "midpoint": 70.0},
+                    ],
+                }
+            }
+        }
+    }
+
+    plan = allocation_plan(market_payload, {"theme_signals": []}, {})
+
+    assert sleeve_targets_from_market(market_payload) == {
+        "core": 12.0,
+        "mainline": 3.5,
+        "thematic": 0.0,
+        "defensive": 84.5,
+    }
+    assert risk_budget_from_market(market_payload) == 15.5
+    assert plan["allocation_policy"]["position_source"] == "market.sleeve_allocation"
+    assert plan["allocation_policy"]["range_clamped"] is False
+    assert plan["allocation_policy"]["range_violation"] is False
+    assert plan["allocation_policy"]["range_check_applies"] is False
+    assert plan["allocation_policy"]["range_override_ignored"] is True
+    assert round(plan["structure_guard_report"]["unallocated_ratio"], 4) == 3.5
+
+
 def test_defensive_market_absorbs_unallocated_thematic_budget() -> None:
     market_payload = {
         "results": {

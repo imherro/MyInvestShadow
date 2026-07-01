@@ -9,6 +9,7 @@ from .allocator import (
     allocation_weight_map,
     legacy_core_price_point_from_etfs,
     market_record,
+    parse_percent_range,
     sleeve_summary,
 )
 from .db import connect, dumps, init_db, loads, row_to_dict, rows_to_dicts
@@ -334,6 +335,30 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
         cash_ratio = summary["defensive"]
         record = market_record(market_payload)
         market_constraints = _market_constraints(record)
+        defensive_quality_weight = 0.0
+        defensive_cash_weight = 0.0
+        for row in targets:
+            if row.get("sleeve") != "defensive":
+                continue
+            components = row.get("etf_gate_components") or {}
+            weight = float(row.get("target_weight_ratio") or 0.0)
+            if (
+                components.get("defensive_layer") == "quality"
+                or row.get("source_note") == "defensive.quality_etf"
+            ):
+                defensive_quality_weight += weight
+            else:
+                defensive_cash_weight += weight
+        market_sleeve_allocation = _market_sleeve_allocation_from_policy(
+            plan["allocation_policy"]
+        )
+        shadow_executable_allocation = _shadow_executable_allocation(
+            sleeve_weights=summary,
+            defensive_quality_weight=defensive_quality_weight,
+            defensive_cash_weight=defensive_cash_weight,
+            market_sleeves=market_sleeve_allocation,
+            gate_universe_audit=plan["gate_universe_audit"],
+        )
 
         payload = {
             "market_fetch_ok": market_snapshot.ok,
@@ -362,6 +387,8 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
             "market_risk_budget_ratio": plan["market_risk_budget_ratio"],
             "position_sizing": plan["position_sizing"],
             "allocation_policy": plan["allocation_policy"],
+            "market_sleeve_allocation": market_sleeve_allocation,
+            "shadow_executable_allocation": shadow_executable_allocation,
             "market_constraints": market_constraints,
             "gate_universe_audit": plan["gate_universe_audit"],
             "structure_guard_report": plan["structure_guard_report"],
@@ -371,6 +398,8 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
                 "market_risk_budget_ratio": plan["market_risk_budget_ratio"],
                 "position_sizing": plan["position_sizing"],
                 "allocation_policy": plan["allocation_policy"],
+                "market_sleeve_allocation": market_sleeve_allocation,
+                "shadow_executable_allocation": shadow_executable_allocation,
                 "market_constraints": market_constraints,
                 "gate_universe_audit": plan["gate_universe_audit"],
                 "structure_guard_report": plan["structure_guard_report"],
@@ -789,6 +818,157 @@ def rebalance_history(conn: Any | None = None, limit: int = 8) -> list[dict[str,
             conn.close()
 
 
+MARKET_SLEEVE_LABELS = {
+    "beta_core": "β核心仓",
+    "core_wide_etf": "β核心仓",
+    "alpha_active": "α主动仓",
+    "mainline_etf": "α主动仓",
+    "leader_alpha": "α主动仓",
+    "defensive_factor": "防御因子仓",
+    "defensive_quality": "防御因子仓",
+    "liquidity": "流动性仓",
+    "cash_like": "流动性仓",
+}
+
+
+def _canonical_market_sleeve_key(key: str) -> str:
+    if key in {"beta_core", "core_wide_etf"}:
+        return "beta_core"
+    if key in {"alpha_active", "mainline_etf", "leader_alpha"}:
+        return "alpha_active"
+    if key in {"defensive_factor", "defensive_quality"}:
+        return "defensive_factor"
+    if key in {"liquidity", "cash_like"}:
+        return "liquidity"
+    return key
+
+
+def _market_sleeve_weight(entry: dict[str, Any]) -> float:
+    try:
+        midpoint = entry.get("midpoint")
+        if midpoint is not None:
+            return float(midpoint)
+    except (TypeError, ValueError):
+        pass
+    return float(parse_percent_range(str(entry.get("target_range") or "")) or 0.0)
+
+
+def _market_sleeve_allocation_from_policy(
+    allocation_policy: dict[str, Any]
+) -> list[dict[str, Any]]:
+    entries = allocation_policy.get("raw_sleeve_allocation") or []
+    result: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        raw_key = str(entry.get("key") or "")
+        canonical_key = _canonical_market_sleeve_key(raw_key)
+        weight = _market_sleeve_weight(entry)
+        result.append(
+            {
+                "key": canonical_key,
+                "raw_key": raw_key,
+                "label": entry.get("label")
+                or entry.get("name")
+                or MARKET_SLEEVE_LABELS.get(raw_key)
+                or MARKET_SLEEVE_LABELS.get(canonical_key)
+                or raw_key,
+                "weight_ratio": weight,
+                "target_range": entry.get("target_range"),
+                "role": entry.get("role"),
+                "asset": entry.get("asset"),
+                "driver": entry.get("driver"),
+            }
+        )
+    return result
+
+
+def _market_sleeve_weight_by_key(
+    rows: list[dict[str, Any]], *keys: str
+) -> float:
+    key_set = set(keys)
+    return sum(
+        float(row.get("weight_ratio") or 0.0)
+        for row in rows
+        if row.get("key") in key_set or row.get("raw_key") in key_set
+    )
+
+
+def _shadow_executable_allocation(
+    *,
+    sleeve_weights: dict[str, Any],
+    defensive_quality_weight: float,
+    defensive_cash_weight: float,
+    market_sleeves: list[dict[str, Any]],
+    gate_universe_audit: dict[str, Any],
+) -> dict[str, Any]:
+    beta_core = float(sleeve_weights.get("core") or 0.0)
+    alpha_executed = float(sleeve_weights.get("mainline") or 0.0) + float(
+        sleeve_weights.get("thematic") or 0.0
+    )
+    market_alpha = _market_sleeve_weight_by_key(
+        market_sleeves,
+        "alpha_active",
+        "mainline_etf",
+        "leader_alpha",
+    )
+    gate_unallocated = float(gate_universe_audit.get("mainline_unallocated_ratio") or 0.0) + float(
+        gate_universe_audit.get("thematic_unallocated_ratio") or 0.0
+    )
+    unallocated_alpha = max(0.0, market_alpha - alpha_executed, gate_unallocated)
+    valid_universe_size = int(float(gate_universe_audit.get("valid_universe_size") or 0.0))
+    unallocated_reason = None
+    if unallocated_alpha > 1e-6:
+        unallocated_reason = (
+            "ETF/个股门禁未通过或有效池为0"
+            if valid_universe_size <= 0
+            else "门禁后未使用的α主动预算"
+        )
+
+    rows = [
+        {
+            "key": "beta_core",
+            "label": "β核心仓",
+            "weight_ratio": beta_core,
+            "market_weight_ratio": _market_sleeve_weight_by_key(
+                market_sleeves, "beta_core", "core_wide_etf"
+            ),
+        },
+        {
+            "key": "alpha_active",
+            "label": "α主动仓",
+            "weight_ratio": alpha_executed,
+            "market_weight_ratio": market_alpha,
+            "unallocated_ratio": unallocated_alpha,
+            "unallocated_reason": unallocated_reason,
+        },
+        {
+            "key": "defensive_factor",
+            "label": "防御因子仓",
+            "weight_ratio": defensive_quality_weight,
+            "market_weight_ratio": _market_sleeve_weight_by_key(
+                market_sleeves, "defensive_factor", "defensive_quality"
+            ),
+        },
+        {
+            "key": "liquidity",
+            "label": "流动性仓",
+            "weight_ratio": defensive_cash_weight,
+            "market_weight_ratio": _market_sleeve_weight_by_key(
+                market_sleeves, "liquidity", "cash_like"
+            ),
+            "temporary_parking_ratio": unallocated_alpha,
+        },
+    ]
+    return {
+        "rows": rows,
+        "total_weight_ratio": sum(float(row.get("weight_ratio") or 0.0) for row in rows),
+        "unallocated_alpha_ratio": unallocated_alpha,
+        "unallocated_reason": unallocated_reason,
+        "temporary_parking_sleeve": "liquidity" if unallocated_alpha > 1e-6 else None,
+    }
+
+
 def latest_state() -> dict[str, Any]:
     init_db()
     with connect() as conn:
@@ -796,15 +976,48 @@ def latest_state() -> dict[str, Any]:
         run_payload = loads(run["payload_json"]) if run else None
         decision_trace = (run_payload or {}).get("decision_trace") or {}
         allocations = _allocations_for_run(conn, int(run["id"]) if run else None)
+        allocation_policy = decision_trace.get("allocation_policy") or (run_payload or {}).get("allocation_policy") or {}
+        gate_universe_audit = decision_trace.get("gate_universe_audit") or (run_payload or {}).get("gate_universe_audit") or {}
+        sleeves = sleeve_summary(allocations)
+        defensive_quality_weight = 0.0
+        defensive_cash_weight = 0.0
+        for row in allocations:
+            if row.get("sleeve") != "defensive":
+                continue
+            components = row.get("etf_gate_components") or {}
+            weight = float(row.get("target_weight_ratio") or 0.0)
+            if (
+                components.get("defensive_layer") == "quality"
+                or row.get("source_note") == "defensive.quality_etf"
+            ):
+                defensive_quality_weight += weight
+            else:
+                defensive_cash_weight += weight
+        market_sleeve_allocation = (
+            (run_payload or {}).get("market_sleeve_allocation")
+            or decision_trace.get("market_sleeve_allocation")
+            or _market_sleeve_allocation_from_policy(allocation_policy)
+        )
+        shadow_executable_allocation = (
+            (run_payload or {}).get("shadow_executable_allocation")
+            or decision_trace.get("shadow_executable_allocation")
+            or _shadow_executable_allocation(
+                sleeve_weights=sleeves,
+                defensive_quality_weight=defensive_quality_weight,
+                defensive_cash_weight=defensive_cash_weight,
+                market_sleeves=market_sleeve_allocation,
+                gate_universe_audit=gate_universe_audit,
+            )
+        )
         nav_points = nav_curve(conn)
         return {
             "run": run,
             "run_payload": run_payload,
             "allocations": allocations,
-            "sleeve_summary": sleeve_summary(allocations),
-            "allocation_policy": decision_trace.get("allocation_policy")
-            or (run_payload or {}).get("allocation_policy")
-            or {},
+            "sleeve_summary": sleeves,
+            "market_sleeve_allocation": market_sleeve_allocation,
+            "shadow_executable_allocation": shadow_executable_allocation,
+            "allocation_policy": allocation_policy,
             "etf_gate_summary": decision_trace.get("etf_gate_summary") or {},
             "etf_gate": decision_trace.get("etf_gate") or [],
             "nav_curve": nav_points,
@@ -851,6 +1064,22 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
             defensive_quality_weight += weight
         else:
             defensive_cash_weight += weight
+    market_sleeve_allocation = (
+        run_payload.get("market_sleeve_allocation")
+        or decision_trace.get("market_sleeve_allocation")
+        or _market_sleeve_allocation_from_policy(allocation_policy)
+    )
+    shadow_executable_allocation = (
+        run_payload.get("shadow_executable_allocation")
+        or decision_trace.get("shadow_executable_allocation")
+        or _shadow_executable_allocation(
+            sleeve_weights=sleeve_weights,
+            defensive_quality_weight=defensive_quality_weight,
+            defensive_cash_weight=defensive_cash_weight,
+            market_sleeves=market_sleeve_allocation,
+            gate_universe_audit=gate_universe_audit,
+        )
+    )
     metrics = {
         "nav": run.get("nav"),
         "active_weight_ratio": run.get("risk_budget_ratio"),
@@ -907,6 +1136,8 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
             },
         ],
         "sleeve_summary": sleeve_weights,
+        "market_sleeve_allocation": market_sleeve_allocation,
+        "shadow_executable_allocation": shadow_executable_allocation,
         "allocation_policy": allocation_policy,
         "market_constraints": market_constraints,
         "optional_source_policy": run_payload.get("optional_source_policy")

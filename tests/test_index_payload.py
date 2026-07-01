@@ -68,6 +68,17 @@ def test_build_index_payload_is_homepage_focused() -> None:
                 "allocation_policy": {
                     "position_source": "market.sleeve_mix",
                     "range_violation": False,
+                    "raw_sleeve_allocation": [
+                        {"key": "beta_core", "label": "β核心仓", "midpoint": 18.0},
+                        {"key": "alpha_active", "label": "α主动仓", "midpoint": 18.0},
+                        {"key": "defensive_factor", "label": "防御因子仓", "midpoint": 20.0},
+                        {"key": "liquidity", "label": "流动性仓", "midpoint": 44.0},
+                    ],
+                },
+                "gate_universe_audit": {
+                    "mainline_unallocated_ratio": 0.0,
+                    "thematic_unallocated_ratio": 0.0,
+                    "valid_universe_size": 2,
                 },
                 "stock_gate": [{"code": "688999.SH", "selected": True}],
                 "defensive_quality_gate": [{"code": "512890.SH", "selected": True}],
@@ -101,6 +112,10 @@ def test_build_index_payload_is_homepage_focused() -> None:
     assert payload["etf_gate"][0]["grade"] == "A"
     assert payload["allocation_policy"]["position_source"] == "market.sleeve_mix"
     assert payload["allocation_policy"]["range_violation"] is False
+    assert payload["market_sleeve_allocation"][0]["key"] == "beta_core"
+    assert payload["market_sleeve_allocation"][0]["weight_ratio"] == 18.0
+    assert payload["shadow_executable_allocation"]["rows"][1]["key"] == "alpha_active"
+    assert payload["shadow_executable_allocation"]["rows"][1]["weight_ratio"] == 18.0
     assert payload["rebalance_history"][0]["basis_date"] == "2026-06-17"
     assert payload["links"]["rebalance_history"] == "/api/rebalance-history"
     assert payload["links"]["full_state"] == "/api/latest"

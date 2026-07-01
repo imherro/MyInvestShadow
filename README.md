@@ -75,12 +75,12 @@ http://127.0.0.1:8013
 
 优先级：
 
-1. 如果市场结果提供 `sleeve_allocation`，优先使用市场研究给出的五仓结构区间中位数。
+1. 如果市场结果提供完整 `sleeve_allocation`，优先使用市场研究给出的 100% 结构区间中位数；`equity_position_range` 只作为风险说明，不再二次放大或压缩该完整结构。
 2. 如果没有 `sleeve_allocation`，但提供完整 `sleeve_mix`，使用旧四仓结构区间中位数。
 3. 如果只有 `equity_position_range`，旧分数仓位只作为区间内取点依据，最终仓位必须落在该区间内。
 4. 如果市场结果缺少官方仓位区间，才使用 `portfolio/position_sizer.py` 中的旧分数分档 fallback。
 
-`sleeve_allocation` 映射：
+旧版 `sleeve_allocation` 映射：
 
 - `core_wide_etf` -> 核心仓位
 - `mainline_etf` -> 主线仓位
@@ -88,12 +88,12 @@ http://127.0.0.1:8013
 - `defensive_quality` -> 收益防御仓位
 - `cash_like` -> 现金防御仓位
 
-兼容当前市场接口新键名：
+当前市场接口新键名：
 
-- `beta_core` -> 核心仓位
-- `alpha_active` -> 主线仓位
-- `defensive_factor` -> 收益防御仓位
-- `liquidity` -> 现金防御仓位
+- `beta_core` -> β核心仓
+- `alpha_active` -> α主动仓
+- `defensive_factor` -> 防御因子仓
+- `liquidity` -> 流动性仓
 
 旧 `sleeve_mix` 映射：
 
@@ -104,6 +104,8 @@ http://127.0.0.1:8013
 
 如果 `sleeve_mix` 不完整，例如只提供 `thematic` 上限，则不接管全部结构；系统只把该字段作为主题上限，其他结构进入 fallback。防御仓位等于 `100% - 实际主动仓位`；门禁过滤造成的主线/主题缺口由结构守恒模块处理，不允许自动回补核心 ETF。
 
+当 market 给出完整 `sleeve_allocation` 时，影子账户遵循“market 是仓位结构总纲，shadow 只负责落地”：市场建议结构保持原样输出；影子落地结构经过 ETF/个股门禁后输出。若 `alpha_active` 未能落地，不强行买入不合格方向，未落地预算临时承接到 `liquidity`，并在 `/api/index` 与页面中展示 `unallocated_alpha_ratio`、原因和临时承接层。
+
 当市场研究处于防守期，或官方仓位区间上限不超过 20%，未落地的主线/主题预算直接回到防御仓，不再强行补给主线。这是为了遵守“指数强但宽度弱”场景下的市场风险约束。
 
 `/api/latest` 和 `/api/index` 会输出 `allocation_policy`，用于审计：
@@ -113,6 +115,8 @@ http://127.0.0.1:8013
 - `fallback_used`：是否因为上游缺少官方仓位字段而使用旧分档
 - `equity_position_range`、`target_active_weight_ratio`、`range_violation`
 - `raw_sleeve_allocation`、`raw_sleeve_mix` 和最终 `sleeve_targets`
+- `market_sleeve_allocation`：market 原始建议结构
+- `shadow_executable_allocation`：门禁后影子落地结构、未落地 α 主动仓和临时承接说明
 
 ## 主线仓位规则
 
@@ -356,7 +360,7 @@ data/shadow_account.sqlite
 
 主页是一个只读仪表盘：
 
-- 仓位结构用一行方块展示核心、主线、主题、收益防御、现金防御，方块宽度对应仓位比例。
+- 仓位结构同时展示“市场建议结构”和“影子落地结构”，方块宽度对应仓位比例，并显示未落地 α 主动仓的原因和临时流动性承接。
 - 资金净值曲线显示日期轴，并叠加 `510300.SH`、`510500.SH` 的收盘价归一化对比线。
 - 影子目标仓位使用底色区分核心、主线、主题、防御。
 - 涨跌颜色遵循 A 股习惯：上涨为红色，降低为绿色。

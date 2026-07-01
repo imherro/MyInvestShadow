@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MyInvestShadow</title>
-    <link rel="stylesheet" href="/static/app.css?v=20260630-sortable-allocations" />
+    <link rel="stylesheet" href="/static/app.css?v=20260701-market-shadow-structure" />
   </head>
   <body>
     <div data-myinvest-header></div>
@@ -48,9 +48,19 @@
       <section class="band">
         <div class="section-head">
           <h2>仓位结构</h2>
-          <span>核心 / 主线 / 主题 / 收益防御 / 现金防御</span>
+          <span>市场建议 / 影子落地</span>
         </div>
-        <div id="sleeveSummary" class="sleeve-summary"></div>
+        <div class="sleeve-compare-grid">
+          <div>
+            <div class="subsection-head">市场建议结构</div>
+            <div id="marketSleeveSummary" class="sleeve-summary"></div>
+          </div>
+          <div>
+            <div class="subsection-head">影子落地结构</div>
+            <div id="sleeveSummary" class="sleeve-summary"></div>
+          </div>
+        </div>
+        <div id="executionNotice" class="execution-notice"></div>
       </section>
 
       <section class="panel">
@@ -167,7 +177,7 @@
     <div data-myinvest-footer></div>
     <div id="toast" class="toast" hidden></div>
     <script src="https://invest.okbbc.com/header.js" data-target="[data-myinvest-header]" defer></script>
-    <script src="/static/app.js?v=20260630-sortable-allocations"></script>
+    <script src="/static/app.js?v=20260701-market-shadow-structure"></script>
     <script src="https://invest.okbbc.com/footer.js" data-target="[data-myinvest-footer]" defer></script>
   </body>
 </html>

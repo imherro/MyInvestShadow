@@ -280,7 +280,7 @@ def _position_sizing_from_market(market_payload: dict[str, Any]) -> dict[str, An
         final_position = fallback_position
         source = "market.equity_position_range"
 
-    if range_bounds is not None:
+    if range_bounds is not None and official_sleeves is None:
         low, high = range_bounds
         before = final_position
         final_position = clamp(final_position * 100.0, low, high) / 100.0
@@ -378,10 +378,14 @@ def allocation_policy_from_market(
     active = sum(float(sleeves[key]) for key in ("core", "mainline", "thematic"))
     low = range_bounds[0] if range_bounds else None
     high = range_bounds[1] if range_bounds else None
+    has_official_sleeve_allocation = _complete_market_sleeve_allocation(record) is not None
     range_violation = False
+    range_outside = False
     if low is not None and high is not None:
+        range_outside = active < low - 1e-6 or active > high + 1e-6
+    if low is not None and high is not None and not has_official_sleeve_allocation:
         range_violation = active < low - 1e-6 or active > high + 1e-6
-    if _complete_market_sleeve_allocation(record) is not None:
+    if has_official_sleeve_allocation:
         sleeve_source = "market.sleeve_allocation"
     elif _complete_market_sleeve_mix(record) is not None:
         sleeve_source = "market.sleeve_mix"
@@ -397,6 +401,8 @@ def allocation_policy_from_market(
         "target_active_weight_ratio": active,
         "range_clamped": bool(components.get("range_clamped")),
         "range_violation": range_violation,
+        "range_check_applies": not has_official_sleeve_allocation,
+        "range_override_ignored": bool(has_official_sleeve_allocation and range_outside),
         "raw_sleeve_allocation": _sleeve_allocation_entries(record),
         "raw_sleeve_mix": record.get("sleeve_mix") or {},
         "sleeve_targets": dict(sleeves),
