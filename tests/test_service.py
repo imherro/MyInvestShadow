@@ -303,3 +303,117 @@ def test_benchmark_curve_uses_saved_allocation_prices(
     assert hs300["points"][1]["close"] == 6.0
     assert hs300["points"][1]["normalized"] == 1.2
     assert zz500["points"][1]["normalized"] == 7.0 / 6.5
+
+
+def test_allocation_weight_curve_fills_missing_dates_and_adds_shanghai_index(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "shadow.sqlite"
+    _use_temp_db(monkeypatch, db_path)
+
+    def fake_close_series(codes: list[str], dates: list[str]) -> dict:
+        assert codes == ["000001.SH"]
+        return {
+            "000001.SH": {
+                "2026-06-24": service.PricePoint("000001.SH", 3000.0, 0.0, "Tushare.index_daily"),
+                "2026-06-25": service.PricePoint("000001.SH", 3060.0, 2.0, "Tushare.index_daily"),
+            }
+        }
+
+    monkeypatch.setattr(service, "fetch_tushare_close_series", fake_close_series)
+    init_db(db_path)
+    with connect(db_path) as conn:
+        allocation_sets = {
+            "2026-06-24": [
+                ("510300.SH", "华泰柏瑞沪深300ETF", "core", 4.0),
+                ("510500.SH", "南方中证500ETF", "core", 6.0),
+            ],
+            "2026-06-25": [
+                ("510300.SH", "华泰柏瑞沪深300ETF", "core", 5.0),
+                ("511880.SH", "银华货币ETF-A", "defensive", 70.0),
+            ],
+        }
+        for basis_date, rows in allocation_sets.items():
+            cursor = conn.execute(
+                """
+                INSERT INTO shadow_runs
+                (run_at, basis_date, market_basis_date, theme_report_id, market_regime,
+                 risk_budget_ratio, cash_ratio, previous_nav, nav, daily_return_ratio,
+                 reason, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"{basis_date}T18:00:00+08:00",
+                    basis_date,
+                    basis_date,
+                    f"theme_{basis_date}",
+                    "test",
+                    10.0,
+                    90.0,
+                    1.0,
+                    1.0,
+                    0.0,
+                    "test",
+                    "{}",
+                ),
+            )
+            run_id = int(cursor.lastrowid)
+            conn.execute(
+                """
+                INSERT INTO nav_points
+                (basis_date, nav, daily_return_ratio, risk_budget_ratio, cash_ratio, run_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (basis_date, 1.0, 0.0, 10.0, 90.0, run_id, basis_date),
+            )
+            for code, name, sleeve, weight in rows:
+                conn.execute(
+                    """
+                    INSERT INTO target_allocations
+                    (run_id, code, name, sleeve, theme, stage, target_weight_ratio,
+                     previous_weight_ratio, drift_ratio, price, pct_chg, evidence_score,
+                     pre_gate_weight_ratio, etf_gate_grade, etf_gate_score, etf_gate_pass,
+                     etf_execution_ratio, etf_gate_reasons_json,
+                     etf_gate_reject_reasons_json, etf_gate_data_gaps_json,
+                     etf_gate_components_json, source_note)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id,
+                        code,
+                        name,
+                        sleeve,
+                        "测试",
+                        "test",
+                        weight,
+                        weight,
+                        0.0,
+                        1.0,
+                        0.0,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        "[]",
+                        "[]",
+                        "[]",
+                        "{}",
+                        "test.price",
+                    ),
+                )
+        conn.commit()
+
+        result = service.allocation_weight_curve(conn)
+
+    assert result["dates"] == ["2026-06-24", "2026-06-25"]
+    cash = next(row for row in result["series"] if row["code"] == "511880.SH")
+    zz500 = next(row for row in result["series"] if row["code"] == "510500.SH")
+    assert cash["points"][0]["target_weight_ratio"] == 0.0
+    assert cash["points"][1]["target_weight_ratio"] == 70.0
+    assert zz500["points"][0]["target_weight_ratio"] == 6.0
+    assert zz500["points"][1]["target_weight_ratio"] == 0.0
+    assert result["background"]["code"] == "000001.SH"
+    assert result["background"]["name"] == "上证指数"
+    assert result["background"]["points"][1]["normalized"] == 1.02

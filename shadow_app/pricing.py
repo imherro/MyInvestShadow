@@ -28,6 +28,7 @@ class PricePoint:
 
 
 MARKET_CODE_RE = re.compile(r"^\d{6}\.(?:SH|SZ|BJ)$")
+INDEX_CODES = {"000001.SH"}
 
 
 def _safe_float(value: Any) -> float | None:
@@ -64,7 +65,13 @@ def _premium_rate(close: float | None, unit_nav: float | None) -> float | None:
 
 
 def _fetch_tushare_one(pro: Any, code: str, trade_date: str) -> PricePoint:
-    methods = ("fund_daily", "daily") if code.endswith((".SH", ".SZ", ".BJ")) else ("daily",)
+    methods = (
+        ("index_daily", "daily")
+        if code in INDEX_CODES
+        else ("fund_daily", "daily")
+        if code.endswith((".SH", ".SZ", ".BJ"))
+        else ("daily",)
+    )
     last_error: str | None = None
     for method_name in methods:
         try:
@@ -144,7 +151,13 @@ def _compact_to_iso_date(value: Any) -> str | None:
 def _fetch_tushare_history_one(
     pro: Any, code: str, start_date: str, end_date: str
 ) -> dict[str, PricePoint]:
-    methods = ("fund_daily", "daily") if code.endswith((".SH", ".SZ", ".BJ")) else ("daily",)
+    methods = (
+        ("index_daily", "daily")
+        if code in INDEX_CODES
+        else ("fund_daily", "daily")
+        if code.endswith((".SH", ".SZ", ".BJ"))
+        else ("daily",)
+    )
     result: dict[str, PricePoint] = {}
     last_error: str | None = None
     for method_name in methods:

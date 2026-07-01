@@ -33,6 +33,28 @@ def test_build_index_payload_is_homepage_focused() -> None:
                 "points": [{"basis_date": "2026-06-17", "close": 4.0, "normalized": 1.0}],
             }
         ],
+        "allocation_weight_curve": {
+            "dates": ["2026-06-17"],
+            "series": [
+                {
+                    "code": "510300.SH",
+                    "display_code": "510300.SH",
+                    "name": "华泰柏瑞沪深300ETF",
+                    "sleeve": "core",
+                    "latest_weight_ratio": 10.8,
+                    "max_weight_ratio": 10.8,
+                    "points": [
+                        {"basis_date": "2026-06-17", "target_weight_ratio": 10.8}
+                    ],
+                }
+            ],
+            "background": {
+                "code": "000001.SH",
+                "name": "上证指数",
+                "available": True,
+                "points": [{"basis_date": "2026-06-17", "close": 3000.0, "normalized": 1.0}],
+            },
+        },
         "allocations": [
             {"code": "510300.SH", "target_weight_ratio": 10.8},
             {
@@ -108,6 +130,8 @@ def test_build_index_payload_is_homepage_focused() -> None:
     assert payload["defensive_quality_gate"][0]["code"] == "512890.SH"
     assert payload["benchmark_curve"][0]["code"] == "510300.SH"
     assert payload["benchmark_curve"][0]["points"][0]["normalized"] == 1.0
+    assert payload["allocation_weight_curve"]["series"][0]["code"] == "510300.SH"
+    assert payload["allocation_weight_curve"]["background"]["code"] == "000001.SH"
     assert payload["etf_gate_summary"]["reviewed_count"] == 1
     assert payload["etf_gate"][0]["grade"] == "A"
     assert payload["allocation_policy"]["position_source"] == "market.sleeve_mix"

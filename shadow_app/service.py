@@ -525,6 +525,7 @@ def run_daily_rebalance(reason: str = "manual", *, allow_stale: bool = False) ->
             "sleeve_summary": summary,
             "nav_curve": nav_points,
             "benchmark_curve": benchmark_curve(conn, nav_points),
+            "allocation_weight_curve": allocation_weight_curve(conn, nav_points),
             "source_status": source_status(conn),
         }
 
@@ -550,6 +551,8 @@ BENCHMARK_ETFS = {
     "510300.SH": "华泰柏瑞沪深300ETF",
     "510500.SH": "南方中证500ETF",
 }
+SHANGHAI_INDEX_CODE = "000001.SH"
+SHANGHAI_INDEX_NAME = "上证指数"
 
 
 def _stored_benchmark_closes(
@@ -650,6 +653,134 @@ def benchmark_curve(
                 }
             )
         return series
+    finally:
+        if should_close:
+            conn.close()
+
+
+def _shanghai_index_background(dates: list[str]) -> dict[str, Any]:
+    remote = fetch_tushare_close_series([SHANGHAI_INDEX_CODE], dates)
+    by_date = remote.get(SHANGHAI_INDEX_CODE, {})
+    base_close: float | None = None
+    rows: list[dict[str, Any]] = []
+    for basis_date in dates:
+        point = by_date.get(basis_date)
+        close = float(point.close) if point and point.close is not None else None
+        if close is not None and base_close is None:
+            base_close = close
+        rows.append(
+            {
+                "basis_date": basis_date,
+                "close": close,
+                "normalized": (
+                    close / base_close
+                    if close is not None and base_close not in (None, 0)
+                    else None
+                ),
+                "source": point.source if point else None,
+            }
+        )
+    error = next((point.error for point in by_date.values() if point.error), None)
+    return {
+        "code": SHANGHAI_INDEX_CODE,
+        "name": SHANGHAI_INDEX_NAME,
+        "base_close": base_close,
+        "available": any(row["normalized"] is not None for row in rows),
+        "error": error,
+        "points": rows,
+    }
+
+
+def allocation_weight_curve(
+    conn: Any | None = None, points: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    should_close = conn is None
+    conn = conn or connect()
+    try:
+        nav_points = points if points is not None else nav_curve(conn)
+        dates = [str(row.get("basis_date") or "") for row in nav_points if row.get("basis_date")]
+        empty = {
+            "dates": dates,
+            "series": [],
+            "background": _shanghai_index_background(dates) if dates else {},
+        }
+        if not dates:
+            return empty
+
+        rows = conn.execute(
+            """
+            SELECT n.basis_date, a.code, a.name, a.sleeve, a.target_weight_ratio,
+                   a.etf_gate_components_json, a.source_note
+            FROM nav_points n
+            JOIN target_allocations a ON a.run_id = n.run_id
+            ORDER BY n.basis_date ASC, a.target_weight_ratio DESC, a.code ASC
+            """
+        ).fetchall()
+        date_set = set(dates)
+        metadata: dict[str, dict[str, Any]] = {}
+        weights: dict[str, dict[str, float]] = {}
+        for row in rows:
+            basis_date = str(row["basis_date"])
+            if basis_date not in date_set:
+                continue
+            code = str(row["code"])
+            components = loads(row["etf_gate_components_json"]) or {}
+            synthetic = SYNTHETIC_INSTRUMENTS.get(code)
+            if synthetic:
+                display_code = synthetic["display_code"]
+                instrument_type = synthetic["instrument_type"]
+            elif str(row["source_note"] or "").startswith("stock_research") or components.get(
+                "instrument_gate"
+            ) == "stock_leader":
+                display_code = code
+                instrument_type = "stock"
+            else:
+                display_code = code
+                instrument_type = "etf"
+            metadata[code] = {
+                "code": code,
+                "display_code": display_code,
+                "name": row["name"] or code,
+                "sleeve": row["sleeve"],
+                "instrument_type": instrument_type,
+                "is_synthetic": bool(synthetic),
+            }
+            weights.setdefault(code, {})[basis_date] = float(row["target_weight_ratio"] or 0.0)
+
+        series: list[dict[str, Any]] = []
+        for code, by_date in weights.items():
+            point_rows = [
+                {
+                    "basis_date": basis_date,
+                    "target_weight_ratio": by_date.get(basis_date, 0.0),
+                }
+                for basis_date in dates
+            ]
+            max_weight = max((row["target_weight_ratio"] for row in point_rows), default=0.0)
+            if max_weight <= 0:
+                continue
+            latest_weight = point_rows[-1]["target_weight_ratio"]
+            series.append(
+                {
+                    **metadata[code],
+                    "latest_weight_ratio": latest_weight,
+                    "max_weight_ratio": max_weight,
+                    "points": point_rows,
+                }
+            )
+
+        series.sort(
+            key=lambda row: (
+                -float(row.get("latest_weight_ratio") or 0.0),
+                -float(row.get("max_weight_ratio") or 0.0),
+                str(row.get("code") or ""),
+            )
+        )
+        return {
+            "dates": dates,
+            "series": series,
+            "background": _shanghai_index_background(dates),
+        }
     finally:
         if should_close:
             conn.close()
@@ -1010,6 +1141,7 @@ def latest_state() -> dict[str, Any]:
             )
         )
         nav_points = nav_curve(conn)
+        allocation_points = allocation_weight_curve(conn, nav_points)
         return {
             "run": run,
             "run_payload": run_payload,
@@ -1022,6 +1154,7 @@ def latest_state() -> dict[str, Any]:
             "etf_gate": decision_trace.get("etf_gate") or [],
             "nav_curve": nav_points,
             "benchmark_curve": benchmark_curve(conn, nav_points),
+            "allocation_weight_curve": allocation_points,
             "rebalance_history": rebalance_history(conn),
             "source_status": source_status(conn),
         }
@@ -1151,6 +1284,8 @@ def build_index_payload(state: dict[str, Any]) -> dict[str, Any]:
         "defensive_quality_gate": decision_trace.get("defensive_quality_gate") or [],
         "nav_curve": state.get("nav_curve") or [],
         "benchmark_curve": state.get("benchmark_curve") or [],
+        "allocation_weight_curve": state.get("allocation_weight_curve")
+        or {"dates": [], "series": [], "background": {}},
         "allocations": allocations,
         "rebalance_history": state.get("rebalance_history") or [],
         "source_status": state.get("source_status") or [],

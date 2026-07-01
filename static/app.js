@@ -163,7 +163,23 @@ const chartColor = (key) => ({
   shadow: "#0f766e",
   "510300.SH": "#2563eb",
   "510500.SH": "#b7791f",
+  "000001.SH": "#64748b",
 }[key] || "#667085");
+
+const allocationPalette = [
+  "#2563eb",
+  "#b42318",
+  "#0f766e",
+  "#7c3aed",
+  "#b7791f",
+  "#0e7490",
+  "#be185d",
+  "#475467",
+  "#7f1d1d",
+  "#365314",
+];
+
+const allocationWeightColor = (index) => allocationPalette[index % allocationPalette.length];
 
 const shortDate = (value) => {
   const text = String(value || "");
@@ -249,6 +265,125 @@ function renderNavChart(points, benchmarks = []) {
       <text x="${width - padX - 190}" y="22" fill="${chartColor("shadow")}">影子 ${last.basis_date} ${fmtNav(last.nav)}</text>
     </svg>
   `;
+}
+
+function renderAllocationWeightChart(curve = {}) {
+  const el = byId("allocationWeightChart");
+  const legend = byId("allocationWeightLegend");
+  const count = byId("allocationCurveCount");
+  if (!el || !legend) return;
+
+  const dates = curve.dates || [];
+  const series = (curve.series || []).filter((row) => (row.points || []).length);
+  const background = curve.background || {};
+  if (!dates.length || !series.length) {
+    el.innerHTML = `<div class="empty-chart">暂无目标仓位历史</div>`;
+    legend.innerHTML = "";
+    if (count) count.textContent = "暂无历史";
+    return;
+  }
+
+  const width = 900;
+  const height = 340;
+  const padX = 56;
+  const padRight = 34;
+  const padTop = 34;
+  const padBottom = 54;
+  const plotWidth = width - padX - padRight;
+  const plotHeight = height - padTop - padBottom;
+  const weights = series
+    .flatMap((row) => row.points || [])
+    .map((point) => Number(point.target_weight_ratio || 0))
+    .filter((value) => Number.isFinite(value));
+  const maxWeight = Math.max(...weights, 5);
+  const yMax = Math.min(100, Math.max(5, Math.ceil(maxWeight / 5) * 5));
+  const ySpan = Math.max(yMax, 1);
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => yMax * ratio);
+  const yGrid = yTicks.map((value) => {
+    const y = height - padBottom - (value / ySpan) * plotHeight;
+    return `
+      <line x1="${padX}" y1="${y.toFixed(1)}" x2="${width - padRight}" y2="${y.toFixed(1)}" stroke="#edf1f5" />
+      <text x="${padX - 10}" y="${(y + 4).toFixed(1)}" text-anchor="end" fill="#667085">${value.toFixed(value % 1 === 0 ? 0 : 1)}%</text>
+    `;
+  }).join("");
+  const tickIndexes = [...new Set([
+    0,
+    Math.floor((dates.length - 1) / 2),
+    dates.length - 1,
+  ])];
+  const xTicks = tickIndexes.map((index) => {
+    const x = dates.length === 1
+      ? padX + plotWidth / 2
+      : padX + (index * plotWidth) / (dates.length - 1);
+    return `
+      <line x1="${x.toFixed(1)}" y1="${height - padBottom}" x2="${x.toFixed(1)}" y2="${height - padBottom + 5}" stroke="#98a2b3" />
+      <text x="${x.toFixed(1)}" y="${height - 22}" text-anchor="middle" fill="#667085">${shortDate(dates[index])}</text>
+    `;
+  }).join("");
+
+  const backgroundValues = (background.points || [])
+    .filter((point) => point.normalized !== null && point.normalized !== undefined)
+    .map((point) => ({ basis_date: point.basis_date, value: Number(point.normalized), close: point.close }));
+  const backgroundNumbers = backgroundValues
+    .map((point) => point.value)
+    .filter((value) => Number.isFinite(value));
+  const backgroundMin = backgroundNumbers.length ? Math.min(...backgroundNumbers) : 0;
+  const backgroundMax = backgroundNumbers.length ? Math.max(...backgroundNumbers) : 0;
+  const backgroundSpan = Math.max(backgroundMax - backgroundMin, 0.001);
+  const backgroundCoords = backgroundNumbers.length
+    ? lineCoords(backgroundValues, dates, backgroundMin, backgroundSpan, width, height, padX, padTop, padBottom)
+    : [];
+  const lastBackground = [...(background.points || [])]
+    .reverse()
+    .find((point) => point.close !== null && point.close !== undefined);
+  const backgroundLine = backgroundCoords.length ? `
+    <polyline points="${backgroundCoords.join(" ")}" fill="none" stroke="${chartColor(background.code)}" stroke-width="2.4" opacity="0.48" vector-effect="non-scaling-stroke" />
+    <text x="${width - padRight - 210}" y="22" fill="${chartColor(background.code)}">
+      背景：${escapeHtml(background.name || "上证指数")} ${lastBackground ? Number(lastBackground.close).toFixed(2) : ""}
+    </text>
+  ` : `
+    <text x="${width - padRight - 210}" y="22" fill="#98a2b3">背景：上证指数暂无数据</text>
+  `;
+
+  const lines = series.map((row, index) => {
+    const color = allocationWeightColor(index);
+    const pointRows = (row.points || []).map((point) => ({
+      basis_date: point.basis_date,
+      value: Number(point.target_weight_ratio || 0),
+    }));
+    const coords = lineCoords(pointRows, dates, 0, ySpan, width, height, padX, padTop, padBottom);
+    if (!coords.length) return "";
+    const [lastX, lastY] = coords[coords.length - 1].split(",");
+    const latestWeight = Number(row.latest_weight_ratio || 0);
+    return `
+      <polyline points="${coords.join(" ")}" fill="none" stroke="${color}" stroke-width="${latestWeight > 0 ? 2.6 : 1.8}" vector-effect="non-scaling-stroke" />
+      <circle cx="${lastX}" cy="${lastY}" r="${latestWeight > 0 ? 3.4 : 2.4}" fill="${color}" />
+    `;
+  }).join("");
+
+  el.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+      <rect x="${padX}" y="${padTop}" width="${plotWidth}" height="${plotHeight}" fill="#ffffff" />
+      ${backgroundLine}
+      ${yGrid}
+      <line x1="${padX}" y1="${height - padBottom}" x2="${width - padRight}" y2="${height - padBottom}" stroke="#d9dee7" />
+      <line x1="${padX}" y1="${padTop}" x2="${padX}" y2="${height - padBottom}" stroke="#d9dee7" />
+      ${xTicks}
+      ${lines}
+      <text x="${padX}" y="22" fill="#667085">目标仓位比例（%）</text>
+    </svg>
+  `;
+
+  legend.innerHTML = series.map((row, index) => `
+    <div class="legend-item" title="${escapeHtml(row.name || row.code)} ${fmtPct(row.latest_weight_ratio, 2)}">
+      <i class="legend-dot" style="background:${allocationWeightColor(index)}"></i>
+      <span>${instrumentCodeLink(row)} ${escapeHtml(row.name || "")}</span>
+      <strong>${fmtPct(row.latest_weight_ratio, 1)}</strong>
+    </div>
+  `).join("");
+  if (count) {
+    count.textContent = `${series.length} 个持仓 / 背景：${background.available ? "上证指数" : "暂无上证指数"}`;
+  }
 }
 
 const numericAllocationSorts = new Set(["target", "drift", "pct"]);
@@ -671,6 +806,7 @@ function render(data) {
   state.latest = data;
   renderMetrics(data);
   renderNavChart(data.nav_curve || [], data.benchmark_curve || []);
+  renderAllocationWeightChart(data.allocation_weight_curve || {});
   renderSleeveSummary(data);
   renderMarketConstraints(data.market_constraints || {});
   renderEtfGate(data.etf_gate_summary || {}, data.etf_gate || []);

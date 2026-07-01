@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MyInvestShadow</title>
-    <link rel="stylesheet" href="/static/app.css?v=20260701-market-shadow-structure" />
+    <link rel="stylesheet" href="/static/app.css?v=20260701-allocation-weight-chart" />
   </head>
   <body>
     <div data-myinvest-header></div>
@@ -98,6 +98,20 @@
 
       <section class="panel">
         <div class="section-head">
+          <h2>目标仓位变化</h2>
+          <span id="allocationCurveCount">--</span>
+        </div>
+        <div
+          id="allocationWeightChart"
+          class="chart allocation-weight-chart"
+          role="img"
+          aria-label="影子目标仓位百分比随时间变化，上证指数作为背景"
+        ></div>
+        <div id="allocationWeightLegend" class="chart-legend"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
           <h2 class="heading-with-help">
             影子目标仓位
             <span class="help-popover" tabindex="0" aria-label="建仓调仓原则">
@@ -177,7 +191,7 @@
     <div data-myinvest-footer></div>
     <div id="toast" class="toast" hidden></div>
     <script src="https://invest.okbbc.com/header.js" data-target="[data-myinvest-header]" defer></script>
-    <script src="/static/app.js?v=20260701-market-shadow-structure"></script>
+    <script src="/static/app.js?v=20260701-allocation-weight-chart"></script>
     <script src="https://invest.okbbc.com/footer.js" data-target="[data-myinvest-footer]" defer></script>
   </body>
 </html>

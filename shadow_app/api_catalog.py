@@ -83,7 +83,7 @@ def public_api_catalog(base_url: str) -> dict[str, Any]:
                     "/api/index",
                     "首页主要数据，适合 Web 首屏和外部概览读取。",
                     [],
-                    "账户概览、仓位结构、市场约束、ETF 门禁、净值曲线、基准 ETF 对比线、调仓历史和来源状态。",
+                    "账户概览、仓位结构、市场约束、ETF 门禁、净值曲线、基准 ETF 对比线、目标仓位历史曲线、调仓历史和来源状态。",
                     True,
                 ),
                 _endpoint(
